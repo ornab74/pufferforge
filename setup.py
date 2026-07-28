@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import sys
-from pathlib import Path
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 
@@ -12,7 +11,6 @@ try:
 except ImportError:
     pybind_include = None
 
-ROOT = Path(__file__).parent
 
 class BuildExt(build_ext):
     c_opts = {
@@ -34,14 +32,15 @@ class BuildExt(build_ext):
             ext.extra_compile_args = opts
         super().build_extensions()
 
-include_dirs = [str(ROOT / "cpp" / "include")]
+
+include_dirs = ["cpp/include"]
 if pybind_include:
     include_dirs.append(pybind_include)
 
 ext_modules = [
     Extension(
         "pufferforge._core",
-        [str(ROOT / "cpp" / "src" / "bindings.cpp")],
+        ["cpp/src/bindings.cpp"],
         include_dirs=include_dirs,
         language="c++",
     )
