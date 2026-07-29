@@ -8,6 +8,7 @@ import time
 import numpy as np
 import torch
 
+from .atlaslab import AtlasWorldConfig, run_atlas_suite, run_atlas_swarm, write_atlas_report
 from .checkpoint import load_checkpoint
 from .config import TrainConfig
 from .envs import NativeLineWorld
@@ -65,12 +66,7 @@ def format_metrics(metrics: TrainMetrics) -> str:
 
 def train_command(args: argparse.Namespace) -> int:
     config = build_config(args)
-    env = NativeLineWorld(
-        config.num_envs,
-        world_size=args.world_size,
-        max_steps=args.max_steps,
-        seed=config.seed,
-    )
+    env = NativeLineWorld(config.num_envs, world_size=args.world_size, max_steps=args.max_steps, seed=config.seed)
     trainer = PPOTrainer(env, config)
     log_file = None
     if args.json_log:
@@ -93,12 +89,7 @@ def train_command(args: argparse.Namespace) -> int:
 
 
 def benchmark_command(args: argparse.Namespace) -> int:
-    env = NativeLineWorld(
-        args.num_envs,
-        world_size=args.world_size,
-        max_steps=args.max_steps,
-        seed=args.seed,
-    )
+    env = NativeLineWorld(args.num_envs, world_size=args.world_size, max_steps=args.max_steps, seed=args.seed)
     rng = np.random.default_rng(args.seed)
     env.reset(args.seed)
     started = time.perf_counter()
@@ -106,28 +97,18 @@ def benchmark_command(args: argparse.Namespace) -> int:
         env.step(rng.integers(0, env.num_actions, size=env.num_envs, dtype=np.int64))
     elapsed = time.perf_counter() - started
     transitions = args.steps * args.num_envs
-    print(
-        json.dumps(
-            {
-                "transitions": transitions,
-                "seconds": elapsed,
-                "transitions_per_second": transitions / elapsed,
-                "num_envs": args.num_envs,
-            },
-            indent=2,
-        )
-    )
+    print(json.dumps({
+        "transitions": transitions,
+        "seconds": elapsed,
+        "transitions_per_second": transitions / elapsed,
+        "num_envs": args.num_envs,
+    }, indent=2))
     env.close()
     return 0
 
 
 def evaluate_command(args: argparse.Namespace) -> int:
-    env = NativeLineWorld(
-        args.num_envs,
-        world_size=args.world_size,
-        max_steps=args.max_steps,
-        seed=args.seed,
-    )
+    env = NativeLineWorld(args.num_envs, world_size=args.world_size, max_steps=args.max_steps, seed=args.seed)
     device = torch.device("cuda" if args.device == "auto" and torch.cuda.is_available() else args.device)
     if args.device == "auto" and not torch.cuda.is_available():
         device = torch.device("cpu")
@@ -149,6 +130,53 @@ def evaluate_command(args: argparse.Namespace) -> int:
     print(json.dumps({"episodes": completed, "mean_return": return_sum / completed}, indent=2))
     env.close()
     return 0
+
+
+def atlas_config(args: argparse.Namespace) -> AtlasWorldConfig:
+    return AtlasWorldConfig(
+        height=args.height,
+        width=args.width,
+        obstacle_density=args.obstacle_density,
+        artifacts=args.artifacts,
+        hazards=args.hazards,
+        shift_period=args.shift_period,
+        max_steps=max(args.steps, 1),
+        seed=args.seed,
+    )
+
+
+def atlas_suite_command(args: argparse.Namespace) -> int:
+    seeds = tuple(int(value) for value in args.seeds.split(",") if value)
+    strategies = tuple(value for value in args.strategies.split(",") if value)
+    report = run_atlas_suite(atlas_config(args), seeds=seeds, strategies=strategies, max_steps=args.steps)
+    write_atlas_report(report, args.output)
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def atlas_swarm_command(args: argparse.Namespace) -> int:
+    report = run_atlas_swarm(
+        atlas_config(args),
+        seed=args.seed,
+        agents=args.agents,
+        steps=args.steps,
+        sync_interval=args.sync_interval,
+        budget_bytes=args.bandwidth_bytes,
+    )
+    write_atlas_report(report, args.output)
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def add_atlas_world_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--steps", type=int, default=80)
+    parser.add_argument("--height", type=int, default=19)
+    parser.add_argument("--width", type=int, default=19)
+    parser.add_argument("--obstacle-density", type=float, default=0.24)
+    parser.add_argument("--artifacts", type=int, default=5)
+    parser.add_argument("--hazards", type=int, default=8)
+    parser.add_argument("--shift-period", type=int, default=31)
 
 
 def make_parser() -> argparse.ArgumentParser:
@@ -178,6 +206,21 @@ def make_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument("--hidden-size", type=int, default=128)
     eval_parser.add_argument("--hidden-layers", type=int, default=2)
     eval_parser.set_defaults(func=evaluate_command)
+
+    suite_parser = subparsers.add_parser("atlas-suite", help="run paired predictive mapping simulations")
+    add_atlas_world_args(suite_parser)
+    suite_parser.add_argument("--seeds", default="1,2,3")
+    suite_parser.add_argument("--strategies", default="random,frontier,atlas_dreamer")
+    suite_parser.add_argument("--output", type=Path, default=Path("atlaslab/suite.json"))
+    suite_parser.set_defaults(func=atlas_suite_command)
+
+    swarm_parser = subparsers.add_parser("atlas-swarm", help="run bandwidth-limited multi-agent cartography")
+    add_atlas_world_args(swarm_parser)
+    swarm_parser.add_argument("--agents", type=int, default=3)
+    swarm_parser.add_argument("--sync-interval", type=int, default=8)
+    swarm_parser.add_argument("--bandwidth-bytes", type=int, default=32768)
+    swarm_parser.add_argument("--output", type=Path, default=Path("atlaslab/swarm.json"))
+    swarm_parser.set_defaults(func=atlas_swarm_command)
     return parser
 
 

@@ -16,6 +16,10 @@ to be understandable, portable, and easy to extend.
   gradient clipping, learning-rate annealing, and explained variance
 - atomic checkpoints, evaluation CLI, JSONL metrics, tests, and benchmarks
 - native autoreset and aggregated episode statistics
+- AtlasLab predictive mapping simulations with hidden controls and changing worlds
+- counterfactual world/atlas beam planning
+- temporal semantic forecasting and causal command learning
+- bandwidth-limited multi-agent map fusion and frontier auctions
 
 ## Architecture
 
@@ -34,8 +38,6 @@ Python remains the research layer. C++ owns transition-heavy loops and contiguou
 memory. See `docs/ARCHITECTURE.md` for the extension contract.
 
 ## Build
-
-Standard editable install:
 
 ```bash
 python -m pip install -e .
@@ -66,12 +68,6 @@ pufferforge train \
   --json-log runs/lineworld.jsonl
 ```
 
-Equivalent module invocation:
-
-```bash
-PYTHONPATH=python python -m pufferforge train --total-timesteps 65536
-```
-
 ## Benchmark native stepping
 
 ```bash
@@ -84,8 +80,33 @@ pufferforge bench --num-envs 4096 --steps 5000
 pufferforge eval checkpoints/step_000000250000.pt --episodes 2048
 ```
 
-The model dimensions used at evaluation must match training. The defaults match the
-default training configuration.
+## AtlasLab predictive mapping
+
+Run paired strategy comparisons across identical procedural worlds:
+
+```bash
+pufferforge atlas-suite \
+  --seeds 1,2,3,4,5 \
+  --strategies random,frontier,atlas_dreamer \
+  --steps 100 \
+  --output atlaslab/suite.json
+```
+
+Run bandwidth-limited coordinated cartography:
+
+```bash
+pufferforge atlas-swarm \
+  --agents 4 \
+  --steps 120 \
+  --sync-interval 8 \
+  --bandwidth-bytes 32768 \
+  --output atlaslab/swarm.json
+```
+
+AtlasLab combines semantic Dirichlet beliefs, per-cell temporal transition models,
+causal command learning, hidden rotated controls, world state snapshots,
+counterfactual beam search, source/sequence map packets, and frontier auctions.
+See `docs/ATLASLAB.md` for details.
 
 ## Custom Python environment
 
@@ -101,9 +122,9 @@ cpp/src/bindings.cpp              C++ implementation + pybind11 module
 python/pufferforge/envs.py        Vector environment protocols/adapters
 python/pufferforge/models.py      Torch actor-critic models
 python/pufferforge/trainer.py     PPO runtime
-python/pufferforge/native.py      Native GAE dispatch with NumPy fallback
+python/pufferforge/atlaslab.py    Predictive mapping research vertical
 benchmarks/                       Throughput tools
-tests/                            Native, Python-vector, and trainer tests
+tests/                            Native, Python-vector, trainer, and mapping tests
 ```
 
 ## Relationship to PufferLib
@@ -112,9 +133,8 @@ PufferLib 4.0 combines a Python CLI/control layer with a compiled backend, Torch
 native training paths, CUDA/NCCL integration, vector environments, self-play,
 hyperparameter sweeps, and a large catalog of native simulations. PufferForge starts
 with the stable architectural seam shared by those systems: a Python research plane
-over a native vectorized execution plane. CUDA kernels, distributed training,
-self-play policy banks, and simulation plugins are explicit next milestones rather
-than hidden behind a monolithic build script.
+over a native vectorized execution plane, then extends it with independently written
+predictive mapping and multi-agent cartography systems.
 
 PufferLib is MIT licensed. This project uses the same permissive license but contains
 an independently written implementation and its own API.
