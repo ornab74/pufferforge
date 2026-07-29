@@ -1,5 +1,17 @@
 """PufferForge: a clean-room Python/C++ reinforcement-learning runtime."""
 
+from .atlaslab import (
+    AtlasAction,
+    AtlasDreamer,
+    AtlasTile,
+    AtlasWorld,
+    AtlasWorldConfig,
+    MapChannel,
+    PredictiveAtlas,
+    run_atlas_episode,
+    run_atlas_suite,
+    run_atlas_swarm,
+)
 from .config import TrainConfig
 from .envs import NativeLineWorld, PythonVectorEnv, StepBatch
 from .models import ActorCritic, RecurrentActorCritic
@@ -18,11 +30,13 @@ except ImportError:
     NATIVE_AVAILABLE = False
 
 __all__ = [
-    "ActorCritic", "Box", "ClipReward", "Discrete", "EloLeague", "FrameStack",
-    "MultiDiscrete", "NATIVE_AVAILABLE", "NativeLineWorld", "NormalizeObservation",
-    "PPOTrainer", "Player", "PrioritizedReplay", "PythonVectorEnv",
-    "RecurrentActorCritic", "ReplaySample", "StepBatch", "TrainConfig",
-    "TrainMetrics", "make", "register", "registered", "spec",
+    "ActorCritic", "AtlasAction", "AtlasDreamer", "AtlasTile", "AtlasWorld",
+    "AtlasWorldConfig", "Box", "ClipReward", "Discrete", "EloLeague", "FrameStack",
+    "MapChannel", "MultiDiscrete", "NATIVE_AVAILABLE", "NativeLineWorld",
+    "NormalizeObservation", "PPOTrainer", "Player", "PredictiveAtlas",
+    "PrioritizedReplay", "PythonVectorEnv", "RecurrentActorCritic", "ReplaySample",
+    "StepBatch", "TrainConfig", "TrainMetrics", "make", "register", "registered",
+    "run_atlas_episode", "run_atlas_suite", "run_atlas_swarm", "spec",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.7.0"
