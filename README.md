@@ -1,6 +1,6 @@
 # PufferForge
 
-PufferForge is a clean-room Python/C++ reconstruction of the essential architecture
+PufferForge Python/C++ reconstruction of the essential architecture
 behind high-throughput reinforcement-learning systems such as PufferLib. It is not
 a line-for-line fork. The first release is a compact, functional foundation designed
 to be understandable, portable, and easy to extend.
