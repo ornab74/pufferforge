@@ -22,3 +22,4 @@ jobs:
       - run: pufferforge bench --num-envs 128 --steps 20
       - run: pufferforge atlas-suite --seeds 1 --steps 6 --output atlas-ci/suite.json
       - run: pufferforge atlas-swarm --agents 2 --steps 6 --sync-interval 3 --bandwidth-bytes 8192 --output atlas-ci/swarm.json
+      - run: PUFFERFORGE_BUILD_NATIVE=0 python -m pip wheel . --no-build-isolation --no-deps -w pure-wheel
