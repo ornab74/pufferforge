@@ -43,13 +43,17 @@ memory. See `docs/ARCHITECTURE.md` for the extension contract.
 python -m pip install -e .
 ```
 
-For an offline environment that already has PyTorch but not the standalone
-`pybind11` package, use PyTorch's bundled pybind11 headers:
+For an offline environment that already has PyTorch but not standalone `pybind11`,
+the build now discovers PyTorch's bundled compatible headers automatically.
+
+Build the pure-Python/NumPy fallback without compiling C++:
 
 ```bash
-./scripts/build_local.sh
-export PYTHONPATH="$PWD/python"
+PUFFERFORGE_BUILD_NATIVE=0 python -m pip install -e . --no-build-isolation
 ```
+
+The fallback keeps `PythonVectorEnv`, PPO, Torch policies, and NumPy GAE available.
+Native LineWorld stepping requires the compiled extension.
 
 Disable OpenMP when necessary:
 
@@ -107,6 +111,17 @@ AtlasLab combines semantic Dirichlet beliefs, per-cell temporal transition model
 causal command learning, hidden rotated controls, world state snapshots,
 counterfactual beam search, source/sequence map packets, and frontier auctions.
 See `docs/ATLASLAB.md` for details.
+
+## SurfGuard-USA Colab
+
+`SurfGuard_USA_PufferForge_Colab.ipynb` is a research pipeline for contiguous-U.S.
+coastal hazard reconstruction, calibrated risk modeling, and a PufferForge PPO alert
+policy. The repaired workflow uses NOAA-safe 31-day CO-OPS request windows, optional
+GRIB dependencies, corrected NDBC missing-value parsing, public top-level PufferForge
+imports, and configurable OpenAI API model identifiers.
+
+Run installation, configuration, and the runtime self-check before starting network
+collection. See `docs/SURFGUARD_COLAB.md` for recovery instructions and scale controls.
 
 ## Custom Python environment
 
