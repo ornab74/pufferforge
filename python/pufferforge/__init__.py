@@ -39,4 +39,4 @@ __all__ = [
     "run_atlas_episode", "run_atlas_suite", "run_atlas_swarm", "spec",
 ]
 
-__version__ = "0.7.0"
+__version__ = "0.7.1"
