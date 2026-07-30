@@ -12,25 +12,40 @@ The notebook is a research workflow, not an operational NOAA/NWS warning product
 
 ## Scale controls
 
-Use the last complete historical calendar year by default. Large national runs can generate many NOAA requests and substantial local or Drive storage.
+The default demonstration uses the last complete historical calendar year and a limited station-year workload. Override without editing the notebook:
+
+```python
+import os
+os.environ["SURFGUARD_DEMO_MAX_STATION_YEARS"] = "24"
+os.environ["SURFGUARD_HISTORICAL_END_YEAR"] = "2025"
+```
+
+Set `FULL_SCALE=True` only after validating storage and NOAA request volume.
 
 ## PufferForge installation
 
-The repaired installer attempts the native C++ extension first. If compilation fails, retry with:
+The installer first upgrades `pip`, `setuptools`, `wheel`, and `pybind11`, then attempts the native C++ extension using the runtime build toolchain:
 
 ```bash
-PUFFERFORGE_BUILD_NATIVE=0 python -m pip install -e . --no-build-isolation
+python -m pip install --upgrade "pip>=24" "setuptools>=61" wheel "pybind11>=2.13"
+python -m pip install --no-build-isolation --editable .
 ```
 
-PPO with `PythonVectorEnv` remains available in fallback mode. Native LineWorld benchmarks require the compiled extension.
+If compilation fails, it retries with:
+
+```bash
+PUFFERFORGE_BUILD_NATIVE=0 python -m pip install --no-build-isolation --editable .
+```
+
+The notebook no longer marks the second packaging attempt as fatal. It inserts the repository's `python/` directory into `sys.path` as a final deterministic source-tree fallback, so PPO with `PythonVectorEnv` remains available even if editable-package metadata fails. Native LineWorld benchmarks still require the compiled extension. Failed commands print their complete trailing pip output rather than only a generic `CalledProcessError`.
 
 ## NOAA CO-OPS
 
-CO-OPS retrievals must be split into inclusive windows of at most 31 days. Do not replace the notebook's chunking helper with one annual request.
+CO-OPS retrievals are split into inclusive windows of at most 31 days. Do not replace the chunking helper with one annual request.
 
 ## NDBC
 
-Historical headers distinguish uppercase `MM` (month) from lowercase `mm` (minute). The repaired parser preserves this distinction and converts documented all-9 missing sentinels to `NaN`.
+Historical headers distinguish uppercase `MM` (month) from lowercase `mm` (minute). The parser normalizes the minute field to `MN` before uppercasing other fields. Historical missing values encoded with 9s are converted to `NaN`.
 
 ## Optional GFS Wave support
 
@@ -38,16 +53,40 @@ Historical headers distinguish uppercase `MM` (month) from lowercase `mm` (minut
 
 ## OpenAI calls
 
-Use configurable API model identifiers rather than hard-coding an account-specific alias:
+The notebook defaults to `gpt-5` for Responses API text and `gpt-4o-mini-tts` for speech. Override them with:
 
 ```python
-import os
-os.environ["SURFGUARD_OPENAI_MODEL"] = "gpt-5"
-os.environ["SURFGUARD_OPENAI_TTS_MODEL"] = "gpt-4o-mini-tts"
+os.environ["SURFGUARD_OPENAI_MODEL"] = "your-accessible-model-id"
+os.environ["SURFGUARD_OPENAI_TTS_MODEL"] = "your-accessible-tts-model-id"
 ```
 
 OpenAI sections are opt-in and require `OPENAI_API_KEY`.
 
-## Repaired notebook validation
+## Repeated SimpleImputer warnings or NaN ROC/PR metrics
 
-The repaired notebook was checked for valid notebook JSON, Python syntax in every code cell, NOAA request chunking, NDBC missing-value parsing, and compatibility with the public PufferForge PPO imports.
+If tide observations or NDBC history are unavailable for the selected station-years,
+whole feature columns can contain only missing values. The repaired notebook now:
+
+- records those columns as `dropped_all_missing_features`;
+- trains only on features with at least one observed training value;
+- preserves the requested and active feature lists in the model bundle/model card;
+- uses incident-group temporal splitting so one dangerous event cannot leak across
+  train, validation, and test;
+- guarantees both classes in validation/test when at least three independent
+  dangerous episodes are available;
+- emits JSON-safe `null` metrics rather than serialized `NaN` if a ranking metric is
+  genuinely undefined.
+
+The PPO import must use the public package surface:
+
+```python
+from pufferforge import PPOTrainer, PythonVectorEnv, TrainConfig
+```
+
+Do not use `from pufferforge.pufferforge ...`; that submodule does not exist.
+
+## Compact notebook and payload
+
+The committed notebook has all execution counts, outputs, widget state, and stale Colab output metadata removed. It is serialized as compact JSON to keep the repository copy below 160 KB.
+
+`.github/surfguard_payload/part_00` through `part_07` contain a gzip-compressed, base64 representation of that exact notebook. CI reconstructs the payload into a temporary file, verifies its SHA-256 against the committed notebook, validates notebook JSON, and compiles every code cell. The payload contains source and markdown only—no API keys, downloaded NOAA data, model artifacts, or Google Drive credentials.

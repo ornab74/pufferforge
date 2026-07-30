@@ -43,23 +43,37 @@ memory. See `docs/ARCHITECTURE.md` for the extension contract.
 python -m pip install -e .
 ```
 
-For an offline environment that already has PyTorch but not standalone `pybind11`,
-the build now discovers PyTorch's bundled compatible headers automatically.
+For an offline environment that already has PyTorch but not standalone
+`pybind11`, the local build helper can use PyTorch's bundled headers:
+
+```bash
+./scripts/build_local.sh
+export PYTHONPATH="$PWD/python"
+```
 
 Build the pure-Python/NumPy fallback without compiling C++:
 
 ```bash
-PUFFERFORGE_BUILD_NATIVE=0 python -m pip install -e . --no-build-isolation
+PUFFERFORGE_BUILD_NATIVE=0 python -m pip install --no-build-isolation --editable .
 ```
-
-The fallback keeps `PythonVectorEnv`, PPO, Torch policies, and NumPy GAE available.
-Native LineWorld stepping requires the compiled extension.
 
 Disable OpenMP when necessary:
 
 ```bash
 PUFFERFORGE_OPENMP=0 ./scripts/build_local.sh
 ```
+
+## Colab-safe editable install
+
+Upgrade the packaging toolchain before an editable install and use the already-installed runtime build toolchain:
+
+```bash
+python -m pip install --upgrade "pip>=24" "setuptools>=61" wheel "pybind11>=2.13"
+python -m pip install --no-build-isolation --editable .
+```
+
+Set `PUFFERFORGE_BUILD_NATIVE=0` to skip the optional C++ extension. The Python
+package still provides `PPOTrainer`, `PythonVectorEnv`, and the NumPy GAE path.
 
 ## Train
 
@@ -112,16 +126,19 @@ causal command learning, hidden rotated controls, world state snapshots,
 counterfactual beam search, source/sequence map packets, and frontier auctions.
 See `docs/ATLASLAB.md` for details.
 
+
 ## SurfGuard-USA Colab
 
-`SurfGuard_USA_PufferForge_Colab.ipynb` is a research pipeline for contiguous-U.S.
-coastal hazard reconstruction, calibrated risk modeling, and a PufferForge PPO alert
-policy. The repaired workflow uses NOAA-safe 31-day CO-OPS request windows, optional
-GRIB dependencies, corrected NDBC missing-value parsing, public top-level PufferForge
-imports, and configurable OpenAI API model identifiers.
+`SurfGuard_USA_PufferForge_Colab.ipynb` builds a research pipeline for contiguous-U.S. coastal hazard reconstruction, calibrated risk modeling, and a PufferForge PPO alert policy. The notebook now:
 
-Run installation, configuration, and the runtime self-check before starting network
-collection. See `docs/SURFGUARD_COLAB.md` for recovery instructions and scale controls.
+- splits NOAA CO-OPS requests into service-safe 31-day windows;
+- installs PufferForge with a native-first, pure-Python fallback;
+- treats GRIB dependencies as optional;
+- validates NDBC month/minute headers and documented missing-value sentinels;
+- imports PPO APIs from the supported top-level `pufferforge` package; and
+- uses configurable OpenAI Responses and speech model IDs.
+
+Open the notebook in Colab and run the installation, configuration, and runtime self-check cells first. See `docs/SURFGUARD_COLAB.md` for failure recovery and scale controls.
 
 ## Custom Python environment
 
