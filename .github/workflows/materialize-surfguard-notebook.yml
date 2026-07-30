@@ -1,10 +1,15 @@
-name: Materialize SurfGuard notebook
+name: materialize-surfguard-notebook
 
 on:
-  push:
-    branches: [agent/surfguard-model-hotfix-v3]
+  pull_request:
+    types: [opened, synchronize, reopened]
     paths:
-      - '.github/surfguard_payload/part_*'
+      - 'SurfGuard_USA_PufferForge_Colab.ipynb'
+      - '.github/surfguard_payload/**'
+      - 'pyproject.toml'
+      - 'setup.py'
+      - 'python/pufferforge/**'
+      - 'tests/**'
       - '.github/workflows/materialize-surfguard-notebook.yml'
 
 permissions:
@@ -12,26 +17,60 @@ permissions:
 
 jobs:
   materialize:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: agent/surfguard-model-hotfix-v3
+          ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
-      - name: Reconstruct and verify notebook
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Reconstruct and verify compact notebook
         shell: bash
         run: |
           cat .github/surfguard_payload/part_* \
             | base64 --decode \
             | gzip --decompress \
-            > SurfGuard_USA_PufferForge_Colab.ipynb
-          echo 'c59aa487fa8bb92b1d03e13ecda1fe76a167f59d6d6166fdf2480ba3693a5dae  SurfGuard_USA_PufferForge_Colab.ipynb' | sha256sum --check
-          python -m json.tool SurfGuard_USA_PufferForge_Colab.ipynb >/dev/null
-      - name: Commit exact notebook
+            > /tmp/SurfGuard_USA_PufferForge_Colab.ipynb
+          python - <<'PY'
+          import ast
+          import hashlib
+          import json
+          from pathlib import Path
+
+          reconstructed = Path('/tmp/SurfGuard_USA_PufferForge_Colab.ipynb')
+          manifest = json.loads(Path('.github/surfguard_payload/manifest.json').read_text())
+          raw = reconstructed.read_bytes()
+          assert hashlib.sha256(raw).hexdigest() == manifest['sha256']
+          assert len(raw) == manifest['raw_bytes']
+          assert len(raw) < 160_000
+          notebook = json.loads(raw)
+          assert 'widgets' not in notebook.get('metadata', {})
+          for index, cell in enumerate(notebook['cells']):
+              if cell.get('cell_type') == 'code':
+                  assert cell.get('execution_count') is None
+                  assert cell.get('outputs') == []
+                  ast.parse(''.join(cell.get('source', [])), filename=f'cell-{index}')
+          Path('SurfGuard_USA_PufferForge_Colab.ipynb').write_bytes(raw)
+          print(manifest)
+          PY
+      - name: Validate package and notebook
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip setuptools wheel pybind11
+          python -m pip install --no-build-isolation --editable '.[dev]'
+          pytest -q
+          mkdir -p /tmp/pure-wheel
+          PUFFERFORGE_BUILD_NATIVE=0 python -m pip wheel . --no-build-isolation --no-deps -w /tmp/pure-wheel
+      - name: Commit exact notebook to PR branch
         shell: bash
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add SurfGuard_USA_PufferForge_Colab.ipynb
-          git diff --cached --quiet || git commit -m 'Update repaired SurfGuard notebook'
-          git push origin HEAD:agent/surfguard-model-hotfix-v3
+          if ! git diff --cached --quiet; then
+            git commit -m 'Materialize compact SurfGuard notebook'
+            git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          fi
