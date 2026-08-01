@@ -238,6 +238,18 @@ See `docs/ATLASLAB.md` for details.
 
 ## SurfGuard-USA Colab
 
+NOAA Storm Events timestamps use explicit, vectorized format parsing with a
+warning-free mixed-format recovery pass. This keeps multi-year Colab ingestion
+fast and quiet while retaining malformed-row tolerance and UTC normalization.
+Forecast collection maps beaches only to NOAA harmonic/reference stations that
+support hourly tides, requests each station once, summarizes failures, and keys
+its cache to the exact station set. Optional GRIB support is loaded dynamically,
+so editors do not report a missing `cfgrib` import in the default configuration.
+The forecast pipeline also reads NOAA prediction capabilities, maps beaches to
+hourly-capable reference stations, refreshes stale station caches, and reports
+unavailable stations once. NOAA's one-year hourly prediction allowance reduces
+the 300-day forecast from ten monthly calls to one request per station.
+
 [![Open SurfGuard-USA in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ornab74/pufferforge/blob/main/examples/SurfGuard_USA_PufferForge_Colab.ipynb)
 
 [`examples/SurfGuard_USA_PufferForge_Colab.ipynb`](examples/SurfGuard_USA_PufferForge_Colab.ipynb)

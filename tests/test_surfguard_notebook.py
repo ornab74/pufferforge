@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import warnings
 from pathlib import Path
 
 import nbformat
@@ -44,6 +45,24 @@ def test_coops_requests_are_chunked_to_service_limit() -> None:
     assert "_coops_data_single" in source
 
 
+def test_future_tides_use_hourly_capable_stations_and_fail_once() -> None:
+    source = _code_source()
+    collector = _function_source("collect_future_tides")
+
+    assert 'HOURLY_TIDE_PREDICTION_TYPES = {"R", "H"}' in source
+    assert 'coops_catalog["prediction_type"].isin(' in source
+    assert 'coops_catalog["prediction_type"].eq("S")' in source
+    assert '"prediction_type", "reference_id"' in source
+    assert "station_frames = []" in collector
+    assert "_coops_data_single(" in collector
+    assert "date_chunks(" not in collector
+    assert "failures.append" in collector
+    assert "continue" in collector
+    assert "frames.extend(station_frames)" in collector
+    assert "station_signature = hashlib.sha256" in collector
+    assert 'print("Future tide failed:"' not in collector
+
+
 def test_notebook_has_no_stale_saved_outputs() -> None:
     for cell in _notebook().cells:
         if cell.cell_type == "code":
@@ -57,6 +76,8 @@ def test_ndbc_sentinels_and_optional_grib_are_explicit() -> None:
     assert '"PRES": 9999.0' in source
     assert "RUN_OPERATIONAL_GFSWAVE=False" in source.replace(" ", "")
     assert "requires optional packages cfgrib and eccodes" in source
+    assert 'importlib.import_module("cfgrib")' in source
+    assert "import cfgrib" not in source
 
 
 
@@ -127,6 +148,42 @@ def test_ndbc_parser_converts_documented_nines_to_nan() -> None:
     assert frame.iloc[0]["WSPD"] != frame.iloc[0]["WSPD"]
     assert frame.iloc[0]["PRES"] != frame.iloc[0]["PRES"]
     assert frame.iloc[1]["WVHT"] == 1.2
+
+
+def test_storm_event_datetime_parser_is_explicit_utc_and_warning_free() -> None:
+    import pandas as pd
+
+    namespace = {
+        "pd": pd,
+        "STORM_DATETIME_FORMATS": (
+            "%d-%b-%y %H:%M:%S",
+            "%d-%b-%Y %H:%M:%S",
+            "%m/%d/%Y %H:%M:%S",
+            "%m/%d/%Y %H:%M",
+        ),
+    }
+    exec(_function_source("parse_storm_datetimes"), namespace)
+
+    values = pd.Series(
+        [
+            "01-JAN-24 03:04:05",
+            "02-FEB-2024 04:05:06",
+            "03/04/2024 05:06:07",
+            "2024-04-05T06:07:08Z",
+            "not-a-date",
+            None,
+        ]
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        parsed = namespace["parse_storm_datetimes"](values)
+
+    assert str(parsed.dtype) == "datetime64[ns, UTC]"
+    assert parsed.iloc[0] == pd.Timestamp("2024-01-01 03:04:05", tz="UTC")
+    assert parsed.iloc[1] == pd.Timestamp("2024-02-02 04:05:06", tz="UTC")
+    assert parsed.iloc[2] == pd.Timestamp("2024-03-04 05:06:07", tz="UTC")
+    assert parsed.iloc[3] == pd.Timestamp("2024-04-05 06:07:08", tz="UTC")
+    assert parsed.iloc[4:].isna().all()
 
 
 

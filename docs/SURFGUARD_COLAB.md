@@ -1,5 +1,24 @@
 # SurfGuard-USA Colab validation and recovery
 
+Storm Events dates are parsed with NOAA's known timestamp formats before a
+vectorized mixed-format fallback is attempted. All results are UTC, invalid
+values remain missing, and pandas no longer emits a format-inference warning
+for every historical partition.
+
+Future hourly tides use only NOAA harmonic/reference (`R`/`H`) prediction
+stations. Subordinate (`S`) stations expose high/low predictions rather than the
+hourly series required by SurfGuard, so they are excluded before beach mapping.
+Each station is requested once, failures are summarized once, and forecast cache
+names include a digest of the selected stations to prevent stale catalog reuse.
+
+The CO-OPS catalog records NOAA's prediction type and reference station ID.
+Hourly feature panels use reference/harmonic stations (`R`/`H`); subordinate
+stations (`S`) are excluded because NOAA limits them to high/low predictions.
+Older cached catalogs without these fields are refreshed automatically. A
+forecast failure is included once in a compact summary. Since NOAA permits one
+year of hourly predictions,
+the 300-day operational forecast uses a single request per station.
+
 The notebook is a research workflow, not an operational NOAA/NWS warning product.
 
 ## Recommended run order
