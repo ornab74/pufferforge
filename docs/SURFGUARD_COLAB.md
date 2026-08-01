@@ -10,6 +10,18 @@ The notebook is a research workflow, not an operational NOAA/NWS warning product
 4. Run the collection and training cells in order.
 5. Leave `RUN_OPERATIONAL_GFSWAVE`, `RUN_GPT_WARNINGS`, `RUN_AUDIO`, and `RUN_GPT_INCIDENT_CURATION` disabled until the base pipeline succeeds.
 
+## CUDA selector
+
+The notebook uses `select_device("auto")`. In a Colab GPU runtime it selects the
+current CUDA device and runs policy inference and PPO optimization there; in a
+standard runtime it falls back to CPU automatically. The runtime self-check
+prints the selected device, GPU name, compute capability, memory, cuDNN version,
+determinism, and TF32 status.
+
+Choose **Runtime > Change runtime type > GPU** before installation when CUDA is
+desired. No notebook edit is required. The PPO configuration keeps
+`device="auto"`; explicit selectors such as `cuda:0` are also supported.
+
 ## Scale controls
 
 The default demonstration uses the last complete historical calendar year and a limited station-year workload. Override without editing the notebook:

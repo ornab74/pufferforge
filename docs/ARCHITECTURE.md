@@ -11,6 +11,7 @@ Python owns:
 - configuration, CLI, evaluation, and logging
 - generic Python environment compatibility
 - future sweep and distributed-process coordination
+- CUDA/CPU selection, CUDA backend policy, and accelerator diagnostics
 
 C++ owns:
 
@@ -22,6 +23,11 @@ C++ owns:
 
 This boundary keeps research code editable while removing Python from the hottest
 per-transition loops.
+
+Native environments remain CPU-resident and feed contiguous NumPy batches to the
+selected Torch device. Policy inference and PPO optimization run on CUDA whenever
+`select_device("auto")` detects a usable GPU; otherwise the identical code path
+runs on CPU. Explicit CUDA indices are validated before model allocation.
 
 ## Runtime flow
 
@@ -37,6 +43,8 @@ per-transition loops.
    epistemic uncertainty that tempers policy updates in uncertain states.
 8. KL guards can stop optimizer epochs early, and checkpoints are atomically
    written as versioned Torch state dictionaries.
+9. When transactional updates are enabled, the pre-update model and optimizer
+   snapshot is restored if numerical checks or the final KL budget fail.
 
 ## Confidence-aware PPO
 
@@ -49,6 +57,16 @@ estimators. The advanced path composes two independent confidence signals:
 Only the policy advantage is tempered. Every critic still learns from its
 bootstrap sample, allowing uncertainty to shrink when the shared representation
 and value heads acquire sufficient evidence.
+
+## Transaction boundary
+
+The rollout is the transaction boundary. PufferForge snapshots model parameters,
+buffers, and optimizer state after collection but before minibatch optimization.
+Non-finite loss or gradient checks can abort inside an epoch; a final approximate
+KL check protects against finite but excessively large policy movement. Rollback
+does not rewind environments because the rejected rollout remains valid on-policy
+data for the pre-update policy and environment stepping is intentionally outside
+the optimizer transaction.
 
 ## Extension contract
 

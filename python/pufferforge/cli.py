@@ -16,6 +16,7 @@ from .atlaslab import (
 )
 from .checkpoint import read_checkpoint
 from .config import TrainConfig
+from .device import select_device
 from .envs import NativeLineWorld
 from .models import ActorCritic
 from .trainer import PPOTrainer, TrainMetrics
@@ -42,9 +43,26 @@ def add_train_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--value-heads", type=int, default=1)
     parser.add_argument("--critic-bootstrap-probability", type=float, default=1.0)
     parser.add_argument("--uncertainty-coef", type=float, default=0.0)
+    parser.add_argument(
+        "--transactional-updates",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    parser.add_argument("--rollback-kl", type=float, default=0.05)
     parser.add_argument("--hidden-size", type=int, default=128)
     parser.add_argument("--hidden-layers", type=int, default=2)
-    parser.add_argument("--device", default="auto")
+    parser.add_argument("--device", default=None)
+    parser.add_argument(
+        "--cuda-deterministic",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    parser.add_argument(
+        "--cuda-tf32",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="allow TF32 acceleration on supported CUDA devices",
+    )
     parser.add_argument("--world-size", type=int, default=15)
     parser.add_argument("--max-steps", type=int, default=64)
     parser.add_argument("--checkpoint-dir", default="checkpoints")
@@ -58,6 +76,12 @@ def add_train_args(parser: argparse.ArgumentParser) -> None:
 def build_config(args: argparse.Namespace) -> TrainConfig:
     if args.config:
         config = TrainConfig.from_json(args.config)
+        if args.device is not None:
+            config.device = args.device
+        if args.cuda_deterministic is not None:
+            config.cuda_deterministic = args.cuda_deterministic
+        if args.cuda_tf32 is not None:
+            config.cuda_allow_tf32 = args.cuda_tf32
     else:
         gae_ensemble = []
         for value in args.gae_estimator:
@@ -82,9 +106,15 @@ def build_config(args: argparse.Namespace) -> TrainConfig:
             value_heads=args.value_heads,
             critic_bootstrap_probability=args.critic_bootstrap_probability,
             uncertainty_coef=args.uncertainty_coef,
+            transactional_updates=args.transactional_updates,
+            rollback_kl=args.rollback_kl,
             hidden_size=args.hidden_size,
             hidden_layers=args.hidden_layers,
-            device=args.device,
+            device=args.device or "auto",
+            cuda_deterministic=bool(args.cuda_deterministic),
+            cuda_allow_tf32=(
+                True if args.cuda_tf32 is None else args.cuda_tf32
+            ),
             checkpoint_dir=args.checkpoint_dir,
             checkpoint_interval=args.checkpoint_interval,
         )
@@ -101,7 +131,9 @@ def format_metrics(metrics: TrainMetrics) -> str:
         f"grad={metrics.gradient_norm:7.3f} epochs={metrics.optimizer_epochs} "
         f"kl_stop={int(metrics.early_stopped)} "
         f"consensus={metrics.advantage_consensus:5.3f} "
-        f"v_unc={metrics.value_uncertainty:7.4f}"
+        f"v_unc={metrics.value_uncertainty:7.4f} "
+        f"reject={int(metrics.update_rejected)} "
+        f"rollback={int(metrics.update_rolled_back)}"
     )
 
 
@@ -109,6 +141,7 @@ def train_command(args: argparse.Namespace) -> int:
     config = build_config(args)
     env = NativeLineWorld(config.num_envs, world_size=args.world_size, max_steps=args.max_steps, seed=config.seed)
     trainer = PPOTrainer(env, config)
+    print(json.dumps({"runtime_device": trainer.device_info.to_dict()}), flush=True)
     if args.resume:
         trainer.resume(args.resume)
     log_file = None
@@ -152,9 +185,12 @@ def benchmark_command(args: argparse.Namespace) -> int:
 
 def evaluate_command(args: argparse.Namespace) -> int:
     env = NativeLineWorld(args.num_envs, world_size=args.world_size, max_steps=args.max_steps, seed=args.seed)
-    device = torch.device("cuda" if args.device == "auto" and torch.cuda.is_available() else args.device)
-    if args.device == "auto" and not torch.cuda.is_available():
-        device = torch.device("cpu")
+    device_info = select_device(
+        args.device,
+        deterministic=args.cuda_deterministic,
+        allow_tf32=args.cuda_tf32,
+    )
+    device = device_info.device
     payload = read_checkpoint(args.checkpoint, map_location=device)
     checkpoint_config = payload.get("config", {})
     hidden_size = args.hidden_size or int(checkpoint_config.get("hidden_size", 128))
@@ -183,7 +219,16 @@ def evaluate_command(args: argparse.Namespace) -> int:
         stats = env.drain_stats()
         completed += int(stats.get("episodes", 0))
         return_sum += float(stats.get("return_sum", 0.0))
-    print(json.dumps({"episodes": completed, "mean_return": return_sum / completed}, indent=2))
+    print(
+        json.dumps(
+            {
+                "episodes": completed,
+                "mean_return": return_sum / completed,
+                "runtime_device": device_info.to_dict(),
+            },
+            indent=2,
+        )
+    )
     env.close()
     return 0
 
@@ -259,6 +304,14 @@ def make_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument("--max-steps", type=int, default=64)
     eval_parser.add_argument("--seed", type=int, default=2)
     eval_parser.add_argument("--device", default="auto")
+    eval_parser.add_argument(
+        "--cuda-deterministic",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    eval_parser.add_argument(
+        "--cuda-tf32", action=argparse.BooleanOptionalAction, default=True
+    )
     eval_parser.add_argument(
         "--hidden-size", type=int, help="override size inferred from checkpoint"
     )

@@ -206,6 +206,11 @@ def test_notebook_enables_confidence_aware_ppo() -> None:
     assert "value_heads=3" in source
     assert "critic_bootstrap_probability=0.8" in source
     assert "uncertainty_coef=1.0" in source
+    assert "transactional_updates=True" in source
+    assert "rollback_kl=0.05" in source
+    assert 'device="auto"' in source
+    assert "runtime_device = select_device" in source
+    assert '"runtime_device": runtime_device.to_dict()' in source
 
 def test_climatology_skips_empty_features_without_runtime_warnings(tmp_path) -> None:
     import warnings

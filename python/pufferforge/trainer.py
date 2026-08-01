@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 import time
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from torch import nn
 
 from .checkpoint import load_checkpoint, save_checkpoint
 from .config import TrainConfig
+from .device import select_device
 from .envs import VectorEnv
 from .models import ActorCritic
 from .native import compute_gae
@@ -37,8 +39,12 @@ class TrainMetrics:
     early_stopped: bool
     advantage_consensus: float
     value_uncertainty: float
+    update_rejected: bool
+    update_rolled_back: bool
+    rollback_reason: str | None
+    device: str
 
-    def to_dict(self) -> dict[str, int | float]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "update": self.update,
             "global_step": self.global_step,
@@ -58,6 +64,10 @@ class TrainMetrics:
             "early_stopped": self.early_stopped,
             "advantage_consensus": self.advantage_consensus,
             "value_uncertainty": self.value_uncertainty,
+            "update_rejected": self.update_rejected,
+            "update_rolled_back": self.update_rolled_back,
+            "rollback_reason": self.rollback_reason,
+            "device": self.device,
         }
 
 
@@ -82,7 +92,12 @@ class PPOTrainer:
 
         self.env = env
         self.config = config
-        self.device = self._resolve_device(config.device)
+        self.device_info = select_device(
+            config.device,
+            deterministic=config.cuda_deterministic,
+            allow_tf32=config.cuda_allow_tf32,
+        )
+        self.device = self.device_info.device
         self.model = model or ActorCritic(
             env.obs_size,
             env.num_actions,
@@ -163,15 +178,6 @@ class PPOTrainer:
         self.start_time = time.perf_counter()
         return payload
 
-    @staticmethod
-    def _resolve_device(requested: str) -> torch.device:
-        if requested == "auto":
-            return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        device = torch.device(requested)
-        if device.type == "cuda" and not torch.cuda.is_available():
-            raise RuntimeError("CUDA requested but unavailable")
-        return device
-
     def collect_rollout(self) -> tuple[np.ndarray, np.ndarray]:
         self.model.eval()
         for t in range(self.config.horizon):
@@ -232,7 +238,7 @@ class PPOTrainer:
 
     def update_policy(
         self, advantages: np.ndarray, returns: np.ndarray
-    ) -> dict[str, float | bool]:
+    ) -> dict[str, object]:
         self.model.train()
         cfg = self.config
         batch_size = cfg.batch_size
@@ -282,6 +288,7 @@ class PPOTrainer:
 
         indices = np.arange(batch_size)
         early_stopped = False
+        invalid_reason = None
         for epoch in range(cfg.update_epochs):
             epoch_kl = 0.0
             epoch_minibatches = 0
@@ -291,9 +298,7 @@ class PPOTrainer:
                     indices[start : start + cfg.minibatch_size], device=self.device
                 )
                 _, new_log_prob, entropy, _new_value, new_value_distribution = (
-                    self.model.act_ensemble(
-                    observations[mb_idx], actions[mb_idx]
-                    )
+                    self.model.act_ensemble(observations[mb_idx], actions[mb_idx])
                 )
                 log_ratio = new_log_prob - old_log_probs[mb_idx]
                 ratio = log_ratio.exp()
@@ -342,11 +347,30 @@ class PPOTrainer:
                     - cfg.entropy_coef * entropy_mean
                 )
 
+                finite_tensors = (
+                    loss,
+                    policy_loss,
+                    value_loss,
+                    entropy_mean,
+                    approx_kl,
+                )
+                if cfg.rollback_on_nonfinite and not all(
+                    bool(torch.isfinite(value)) for value in finite_tensors
+                ):
+                    invalid_reason = "non_finite_loss"
+                    break
+
                 self.optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 gradient_norm = nn.utils.clip_grad_norm_(
                     self.model.parameters(), cfg.max_grad_norm
                 )
+                if cfg.rollback_on_nonfinite and not bool(
+                    torch.isfinite(gradient_norm)
+                ):
+                    invalid_reason = "non_finite_gradient"
+                    self.optimizer.zero_grad(set_to_none=True)
+                    break
                 self.optimizer.step()
 
                 totals["policy_loss"] += float(policy_loss.detach())
@@ -359,6 +383,8 @@ class PPOTrainer:
                 epoch_kl += float(approx_kl.detach())
                 epoch_minibatches += 1
 
+            if invalid_reason is not None:
+                break
             totals["optimizer_epochs"] = float(epoch + 1)
             mean_epoch_kl = epoch_kl / max(1, epoch_minibatches)
             if cfg.target_kl is not None and mean_epoch_kl > cfg.target_kl:
@@ -370,7 +396,20 @@ class PPOTrainer:
         averaged = {key: value / count for key, value in totals.items()}
         averaged["optimizer_epochs"] = epochs
         averaged["early_stopped"] = early_stopped
+        averaged["invalid_reason"] = invalid_reason
         return averaged
+
+    def _snapshot_update_state(self) -> tuple[dict, dict]:
+        model_state = {
+            name: value.detach().clone()
+            for name, value in self.model.state_dict().items()
+        }
+        return model_state, deepcopy(self.optimizer.state_dict())
+
+    def _restore_update_state(self, snapshot: tuple[dict, dict]) -> None:
+        model_state, optimizer_state = snapshot
+        self.model.load_state_dict(model_state)
+        self.optimizer.load_state_dict(optimizer_state)
 
     def train(
         self,
@@ -386,7 +425,23 @@ class PPOTrainer:
                 lr = self.config.learning_rate
 
             advantages, returns = self.collect_rollout()
+            snapshot = (
+                self._snapshot_update_state()
+                if self.config.transactional_updates
+                else None
+            )
             losses = self.update_policy(advantages, returns)
+            rollback_reason = losses["invalid_reason"]
+            if (
+                rollback_reason is None
+                and self.config.transactional_updates
+                and self.config.rollback_kl is not None
+                and float(losses["approx_kl"]) > self.config.rollback_kl
+            ):
+                rollback_reason = "kl_budget_exceeded"
+            update_rolled_back = rollback_reason is not None and snapshot is not None
+            if update_rolled_back:
+                self._restore_update_state(snapshot)
             stats = self.env.drain_stats()
 
             value_flat = self.values.reshape(-1)
@@ -417,6 +472,12 @@ class PPOTrainer:
                 early_stopped=bool(losses["early_stopped"]),
                 advantage_consensus=float(self.advantage_confidence.mean()),
                 value_uncertainty=float(self.value_uncertainty.mean()),
+                update_rejected=rollback_reason is not None,
+                update_rolled_back=update_rolled_back,
+                rollback_reason=(
+                    str(rollback_reason) if update_rolled_back else None
+                ),
+                device=str(self.device),
             )
             self.completed_updates = update
             history.append(metrics)

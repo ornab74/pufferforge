@@ -30,9 +30,14 @@ class TrainConfig:
     value_heads: int = 1
     critic_bootstrap_probability: float = 1.0
     uncertainty_coef: float = 0.0
+    transactional_updates: bool = False
+    rollback_kl: float | None = 0.05
+    rollback_on_nonfinite: bool = True
     anneal_lr: bool = True
     normalize_advantage: bool = True
     device: str = "auto"
+    cuda_deterministic: bool = False
+    cuda_allow_tf32: bool = True
     hidden_size: int = 128
     hidden_layers: int = 2
     checkpoint_interval: int = 25
@@ -72,6 +77,8 @@ class TrainConfig:
             raise ValueError("value_heads must be positive")
         if not 0.0 < self.critic_bootstrap_probability <= 1.0:
             raise ValueError("critic_bootstrap_probability must be in (0, 1]")
+        if self.rollback_kl is not None and self.rollback_kl <= 0:
+            raise ValueError("rollback_kl must be positive or None")
         non_negative = (
             "clip_coef",
             "value_clip_coef",

@@ -18,6 +18,8 @@ to be understandable, portable, and easy to extend.
 - reproducible CPU/CUDA seeding and complete-rollout timestep budgeting
 - multi-timescale Advantage Consensus for robust short/long-horizon credit assignment
 - bootstrapped value ensembles with uncertainty-tempered policy updates
+- transactional PPO updates with exact model/optimizer rollback
+- automatic CUDA/CPU selection with indexed-GPU validation and hardware telemetry
 - atomic checkpoints, evaluation CLI, JSONL metrics, tests, and benchmarks
 - native autoreset and aggregated episode statistics
 - AtlasLab predictive mapping simulations with hidden controls and changing worlds
@@ -95,6 +97,24 @@ pufferforge train \
   --json-log runs/lineworld.jsonl
 ```
 
+### CUDA and CPU selection
+
+`--device auto` is the default. It selects the current CUDA device when PyTorch
+reports CUDA as usable and otherwise falls back to CPU. You can override it with
+`--device cpu`, `--device cuda`, or an indexed selector such as
+`--device cuda:1`. Invalid or unavailable CUDA indices fail before model creation.
+
+```bash
+pufferforge train --config config/lineworld.json --device auto
+pufferforge eval checkpoints/step_000000250000.pt --device cuda:0
+```
+
+Startup output reports the selected device, GPU name, CUDA device count, compute
+capability, memory, cuDNN version, determinism, and TF32 status. TF32 is enabled
+by default on supported CUDA hardware for faster matrix multiplication. Use
+`--cuda-deterministic` for reproducibility or `--no-cuda-tf32` to disable TF32.
+Both training and evaluation use the same public `select_device()` API.
+
 ### Advanced PPO controls
 
 PufferForge uses clipped PPO with GAE, value clipping, entropy regularization,
@@ -146,6 +166,19 @@ Watch `advantage_consensus` approach 1 when temporal estimators agree and inspec
 `value_uncertainty` for unfamiliar or poorly modeled states. Setting
 `gae_ensemble` to `[]`, `value_heads` to `1`, and `uncertainty_coef` to `0`
 recovers conventional PPO behavior.
+
+### Transactional policy updates
+
+The advanced profile also enables `transactional_updates`. Before every PPO
+update, PufferForge snapshots model parameters, buffers, Adam moments, and
+optimizer settings. It aborts on non-finite losses or gradients and validates the
+completed update against `rollback_kl`. A rejected update restores the exact
+pre-update state while retaining the collected runtime metrics for diagnosis.
+
+`update_rejected`, `update_rolled_back`, and `rollback_reason` are included in
+console and JSONL telemetry. Set `--no-transactional-updates` for
+memory-constrained runs; snapshots temporarily require approximately one
+additional model plus optimizer state.
 
 ## Benchmark native stepping
 

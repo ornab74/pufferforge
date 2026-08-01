@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+import torch
 from pufferforge import NativeLineWorld, PPOTrainer, TrainConfig
 
 
@@ -27,6 +28,7 @@ def test_trainer_smoke(tmp_path) -> None:
     assert history[-1].gradient_norm >= 0
     assert history[-1].optimizer_epochs == 1
     assert isinstance(history[-1].early_stopped, bool)
+    assert history[-1].device == "cpu"
     assert list(tmp_path.glob("*.pt"))
 
 
@@ -165,3 +167,59 @@ def test_consensus_gae_and_bootstrapped_critic_train_together() -> None:
 def test_consensus_and_ensemble_configuration_is_validated(changes) -> None:
     with pytest.raises(ValueError):
         TrainConfig(**changes).validate()
+
+
+def test_transactional_update_restores_model_and_optimizer() -> None:
+    config = TrainConfig(
+        total_timesteps=64,
+        num_envs=8,
+        horizon=8,
+        minibatch_size=32,
+        update_epochs=1,
+        hidden_size=16,
+        hidden_layers=1,
+        checkpoint_interval=0,
+        device="cpu",
+        transactional_updates=True,
+        rollback_kl=0.01,
+    )
+    trainer = PPOTrainer(
+        NativeLineWorld(8, world_size=7, max_steps=8, seed=5), config
+    )
+    before = {
+        name: value.detach().clone() for name, value in trainer.model.state_dict().items()
+    }
+
+    def hazardous_update(advantages, returns):
+        del advantages, returns
+        with torch.no_grad():
+            for parameter in trainer.model.parameters():
+                parameter.add_(10.0)
+        trainer.optimizer.param_groups[0]["lr"] = 0.9
+        return {
+            "policy_loss": 1.0,
+            "value_loss": 1.0,
+            "entropy": 0.0,
+            "approx_kl": 0.5,
+            "clip_fraction": 1.0,
+            "gradient_norm": 1.0,
+            "optimizer_epochs": 1.0,
+            "early_stopped": True,
+            "invalid_reason": None,
+        }
+
+    trainer.update_policy = hazardous_update
+    metrics = trainer.train()[-1]
+
+    assert metrics.update_rejected
+    assert metrics.update_rolled_back
+    assert metrics.rollback_reason == "kl_budget_exceeded"
+    assert trainer.optimizer.param_groups[0]["lr"] == config.learning_rate
+    for name, value in trainer.model.state_dict().items():
+        assert torch.equal(value, before[name])
+    trainer.close()
+
+
+def test_transaction_configuration_is_validated() -> None:
+    with pytest.raises(ValueError, match="rollback_kl"):
+        TrainConfig(rollback_kl=0.0).validate()

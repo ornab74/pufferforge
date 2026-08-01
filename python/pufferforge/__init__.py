@@ -13,6 +13,7 @@ from .atlaslab import (
     run_atlas_swarm,
 )
 from .config import TrainConfig
+from .device import DeviceInfo, select_device
 from .envs import NativeLineWorld, PythonVectorEnv, StepBatch
 from .models import ActorCritic, RecurrentActorCritic
 from .registry import make, register, registered, spec
@@ -39,6 +40,7 @@ __all__ = [
     "AtlasWorldConfig",
     "Box",
     "ClipReward",
+    "DeviceInfo",
     "Discrete",
     "EloLeague",
     "FrameStack",
@@ -62,6 +64,7 @@ __all__ = [
     "run_atlas_episode",
     "run_atlas_suite",
     "run_atlas_swarm",
+    "select_device",
     "spec",
 ]
 
