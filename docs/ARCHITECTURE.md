@@ -29,9 +29,26 @@ per-transition loops.
 2. Actions are converted to one contiguous `int64` NumPy array.
 3. `LineWorldVec::step` releases the GIL and advances all environments.
 4. C++ returns views of observations, rewards, and done flags without copying.
-5. Python records the rollout and asks the native GAE kernel for advantages.
-6. Torch performs PPO minibatch updates.
-7. Checkpoints are atomically written as Torch state dictionaries.
+5. Python records the rollout and asks the native GAE kernel for each configured
+   temporal estimator.
+6. Multi-timescale advantages are combined by median and weighted by estimator
+   consensus.
+7. Torch performs PPO minibatch updates; bootstrapped critic heads expose
+   epistemic uncertainty that tempers policy updates in uncertain states.
+8. KL guards can stop optimizer epochs early, and checkpoints are atomically
+   written as versioned Torch state dictionaries.
+
+## Confidence-aware PPO
+
+Conventional PPO is recovered with one value head and no additional GAE
+estimators. The advanced path composes two independent confidence signals:
+
+- temporal confidence from sign agreement and dispersion among GAE timescales;
+- model confidence from disagreement among bootstrapped value heads.
+
+Only the policy advantage is tempered. Every critic still learns from its
+bootstrap sample, allowing uncertainty to shrink when the shared representation
+and value heads acquire sufficient evidence.
 
 ## Extension contract
 

@@ -199,6 +199,14 @@ def test_notebook_beach_alert_env_runs_with_pufferforge_ppo() -> None:
     trainer.close()
     assert history and history[-1].global_step == 16
 
+
+def test_notebook_enables_confidence_aware_ppo() -> None:
+    source = _code_source()
+    assert "gae_ensemble=((0.97, 0.90), (0.995, 0.97))" in source
+    assert "value_heads=3" in source
+    assert "critic_bootstrap_probability=0.8" in source
+    assert "uncertainty_coef=1.0" in source
+
 def test_climatology_skips_empty_features_without_runtime_warnings(tmp_path) -> None:
     import warnings
 

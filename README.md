@@ -16,6 +16,8 @@ to be understandable, portable, and easy to extend.
   gradient clipping, learning-rate annealing, KL early stopping, and explained variance
 - gradient-norm and optimizer-epoch telemetry for diagnosing unstable PPO updates
 - reproducible CPU/CUDA seeding and complete-rollout timestep budgeting
+- multi-timescale Advantage Consensus for robust short/long-horizon credit assignment
+- bootstrapped value ensembles with uncertainty-tempered policy updates
 - atomic checkpoints, evaluation CLI, JSONL metrics, tests, and benchmarks
 - native autoreset and aggregated episode statistics
 - AtlasLab predictive mapping simulations with hidden controls and changing worlds
@@ -105,6 +107,45 @@ see whether updates are saturating the gradient clip or stopping early.
 `total_timesteps` is a lower bound: training completes whole vector rollouts and
 therefore rounds up to `num_envs * horizon`. This avoids silently training for
 fewer transitions than requested.
+
+Resume at a rollout boundary with the same environment and network shape:
+
+```bash
+pufferforge train \
+  --config config/lineworld.json \
+  --resume checkpoints/step_000000131072.pt
+```
+
+The checkpoint restores model weights, Adam state, global steps, update number,
+and learning-rate schedule position. The vector environments begin fresh
+episodes after resume; incompatible rollout or network dimensions are rejected
+up front. JSONL metrics include `early_stopped` for KL-triggered updates.
+
+### Advantage Consensus and critic uncertainty
+
+The advanced profile in `config/lineworld.json` enables two complementary RL
+features:
+
+- **Multi-timescale Advantage Consensus** computes GAE at the base horizon and
+  additional `gae_ensemble` horizons. The median becomes the training advantage;
+  sign agreement and relative dispersion produce a confidence weight. This lets
+  short-term and long-term credit assignment vote instead of forcing every task
+  through one discount timescale.
+- **Bootstrapped Value Ensemble** uses `value_heads` critics sharing one encoder.
+  Independent bootstrap masks preserve useful disagreement between heads.
+  `uncertainty_coef` tempers policy gradients in states where critic estimates
+  disagree, while value learning continues normally.
+
+Run the combined profile:
+
+```bash
+pufferforge train --config config/lineworld.json --json-log runs/advanced.jsonl
+```
+
+Watch `advantage_consensus` approach 1 when temporal estimators agree and inspect
+`value_uncertainty` for unfamiliar or poorly modeled states. Setting
+`gae_ensemble` to `[]`, `value_heads` to `1`, and `uncertainty_coef` to `0`
+recovers conventional PPO behavior.
 
 ## Benchmark native stepping
 

@@ -25,6 +25,11 @@ class TrainConfig:
     max_grad_norm: float = 0.5
     target_kl: float | None = 0.02
     adam_epsilon: float = 1e-5
+    gae_ensemble: tuple[tuple[float, float], ...] = ()
+    consensus_power: float = 1.0
+    value_heads: int = 1
+    critic_bootstrap_probability: float = 1.0
+    uncertainty_coef: float = 0.0
     anneal_lr: bool = True
     normalize_advantage: bool = True
     device: str = "auto"
@@ -56,6 +61,17 @@ class TrainConfig:
             raise ValueError("target_kl must be positive or None")
         if self.adam_epsilon <= 0:
             raise ValueError("adam_epsilon must be positive")
+        for index, pair in enumerate(self.gae_ensemble):
+            if len(pair) != 2 or not all(0.0 <= float(value) <= 1.0 for value in pair):
+                raise ValueError(
+                    f"gae_ensemble[{index}] must contain gamma and lambda in [0, 1]"
+                )
+        if self.consensus_power < 0 or self.uncertainty_coef < 0:
+            raise ValueError("consensus_power and uncertainty_coef must be non-negative")
+        if self.value_heads <= 0:
+            raise ValueError("value_heads must be positive")
+        if not 0.0 < self.critic_bootstrap_probability <= 1.0:
+            raise ValueError("critic_bootstrap_probability must be in (0, 1]")
         non_negative = (
             "clip_coef",
             "value_clip_coef",

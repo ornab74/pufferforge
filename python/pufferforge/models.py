@@ -14,12 +14,21 @@ def orthogonal_init(module: nn.Module, gain: float = math.sqrt(2.0)) -> nn.Modul
 
 
 class ActorCritic(nn.Module):
-    def __init__(self, obs_size: int, num_actions: int, hidden_size: int = 128, hidden_layers: int = 2) -> None:
+    def __init__(
+        self,
+        obs_size: int,
+        num_actions: int,
+        hidden_size: int = 128,
+        hidden_layers: int = 2,
+        value_heads: int = 1,
+    ) -> None:
         super().__init__()
         if obs_size <= 0 or num_actions <= 1:
             raise ValueError("invalid observation or action dimensions")
         if hidden_layers <= 0:
             raise ValueError("hidden_layers must be positive")
+        if value_heads <= 0:
+            raise ValueError("value_heads must be positive")
         layers: list[nn.Module] = []
         in_features = obs_size
         for _ in range(hidden_layers):
@@ -28,20 +37,47 @@ class ActorCritic(nn.Module):
         self.encoder = nn.Sequential(*layers)
         self.actor = nn.Linear(hidden_size, num_actions)
         self.critic = nn.Linear(hidden_size, 1)
+        self.extra_critics = nn.ModuleList(
+            nn.Linear(hidden_size, 1) for _ in range(value_heads - 1)
+        )
+        self.value_heads = value_heads
         self.encoder.apply(orthogonal_init)
         orthogonal_init(self.actor, gain=0.01)
         orthogonal_init(self.critic, gain=1.0)
+        self.extra_critics.apply(lambda module: orthogonal_init(module, gain=1.0))
+
+    def forward_distribution(
+        self, observations: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        features = self.encoder(observations.float())
+        heads = [self.critic(features).squeeze(-1)]
+        heads.extend(critic(features).squeeze(-1) for critic in self.extra_critics)
+        return self.actor(features), torch.stack(heads, dim=-1)
 
     def forward(self, observations: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        features = self.encoder(observations.float())
-        return self.actor(features), self.critic(features).squeeze(-1)
+        logits, value_distribution = self.forward_distribution(observations)
+        return logits, value_distribution.mean(dim=-1)
 
     def act(self, observations: torch.Tensor, actions: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        logits, values = self(observations)
+        actions, log_prob, entropy, values, _ = self.act_ensemble(
+            observations, actions
+        )
+        return actions, log_prob, entropy, values
+
+    def act_ensemble(
+        self, observations: torch.Tensor, actions: torch.Tensor | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        logits, value_distribution = self.forward_distribution(observations)
         distribution = torch.distributions.Categorical(logits=logits)
         if actions is None:
             actions = distribution.sample()
-        return actions, distribution.log_prob(actions), distribution.entropy(), values
+        return (
+            actions,
+            distribution.log_prob(actions),
+            distribution.entropy(),
+            value_distribution.mean(dim=-1),
+            value_distribution,
+        )
 
 
 class RecurrentActorCritic(nn.Module):

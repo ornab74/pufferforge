@@ -10,7 +10,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from .checkpoint import save_checkpoint
+from .checkpoint import load_checkpoint, save_checkpoint
 from .config import TrainConfig
 from .envs import VectorEnv
 from .models import ActorCritic
@@ -34,6 +34,9 @@ class TrainMetrics:
     learning_rate: float
     gradient_norm: float
     optimizer_epochs: int
+    early_stopped: bool
+    advantage_consensus: float
+    value_uncertainty: float
 
     def to_dict(self) -> dict[str, int | float]:
         return {
@@ -52,6 +55,9 @@ class TrainMetrics:
             "learning_rate": self.learning_rate,
             "gradient_norm": self.gradient_norm,
             "optimizer_epochs": self.optimizer_epochs,
+            "early_stopped": self.early_stopped,
+            "advantage_consensus": self.advantage_consensus,
+            "value_uncertainty": self.value_uncertainty,
         }
 
 
@@ -82,7 +88,14 @@ class PPOTrainer:
             env.num_actions,
             hidden_size=config.hidden_size,
             hidden_layers=config.hidden_layers,
+            value_heads=config.value_heads,
         )
+        model_heads = int(getattr(self.model, "value_heads", 1))
+        if model_heads != config.value_heads:
+            raise ValueError(
+                f"model has {model_heads} value heads; config requests "
+                f"{config.value_heads}"
+            )
         self.model.to(self.device)
         self.optimizer = torch.optim.Adam(
             self.model.parameters(),
@@ -97,6 +110,8 @@ class PPOTrainer:
         self.rewards = np.empty(shape, dtype=np.float32)
         self.dones = np.empty(shape, dtype=np.uint8)
         self.values = np.empty(shape, dtype=np.float32)
+        self.value_uncertainty = np.zeros(shape, dtype=np.float32)
+        self.advantage_confidence = np.ones(shape, dtype=np.float32)
 
         self.current_obs = np.asarray(env.reset(config.seed), dtype=np.float32)
         if self.current_obs.shape != (config.num_envs, env.obs_size):
@@ -105,7 +120,48 @@ class PPOTrainer:
                 f"({config.num_envs}, {env.obs_size})"
             )
         self.global_step = 0
+        self.completed_updates = 0
         self.start_time = time.perf_counter()
+
+    def resume(self, path: str | Path, *, load_optimizer: bool = True) -> dict:
+        """Restore training progress at a rollout boundary.
+
+        Environments are reset by construction, so a resumed run continues with
+        fresh episodes while retaining policy, optimizer, and schedule progress.
+        """
+        payload = load_checkpoint(
+            path,
+            model=self.model,
+            optimizer=self.optimizer if load_optimizer else None,
+            map_location=self.device,
+        )
+        saved_config = payload["config"]
+        if not isinstance(saved_config, dict):
+            raise TypeError("checkpoint config must be a dictionary")
+        shape_fields = (
+            "num_envs",
+            "horizon",
+            "hidden_size",
+            "hidden_layers",
+            "value_heads",
+        )
+        mismatches = {
+            name: (saved_config.get(name), getattr(self.config, name))
+            for name in shape_fields
+            if saved_config.get(name) != getattr(self.config, name)
+        }
+        if mismatches:
+            details = ", ".join(
+                f"{name}={saved!r} (checkpoint) != {current!r} (current)"
+                for name, (saved, current) in mismatches.items()
+            )
+            raise ValueError(f"checkpoint is incompatible with this trainer: {details}")
+        self.global_step = int(payload["global_step"])
+        self.completed_updates = int(payload["update"])
+        if self.global_step < 0 or self.completed_updates < 0:
+            raise ValueError("checkpoint progress counters cannot be negative")
+        self.start_time = time.perf_counter()
+        return payload
 
     @staticmethod
     def _resolve_device(requested: str) -> torch.device:
@@ -121,7 +177,9 @@ class PPOTrainer:
         for t in range(self.config.horizon):
             obs_tensor = torch.as_tensor(self.current_obs, device=self.device)
             with torch.inference_mode():
-                actions, log_probs, _, values = self.model.act(obs_tensor)
+                actions, log_probs, _, values, value_distribution = (
+                    self.model.act_ensemble(obs_tensor)
+                )
 
             actions_np = actions.cpu().numpy().astype(np.int64, copy=False)
             result = self.env.step(actions_np)
@@ -130,6 +188,9 @@ class PPOTrainer:
             self.actions[t] = actions_np
             self.log_probs[t] = log_probs.cpu().numpy()
             self.values[t] = values.cpu().numpy()
+            self.value_uncertainty[t] = (
+                value_distribution.std(dim=-1, correction=0).cpu().numpy()
+            )
             self.rewards[t] = result.rewards
             self.dones[t] = result.done.astype(np.uint8, copy=False)
             self.current_obs = np.asarray(result.observations, dtype=np.float32)
@@ -139,19 +200,39 @@ class PPOTrainer:
             _, next_values = self.model(
                 torch.as_tensor(self.current_obs, device=self.device)
             )
-        advantages, returns = compute_gae(
-            self.rewards,
-            self.dones,
-            self.values,
-            next_values.cpu().numpy(),
-            self.config.gamma,
-            self.config.gae_lambda,
+        estimators = [(self.config.gamma, self.config.gae_lambda)]
+        estimators.extend(
+            (float(gamma), float(gae_lambda))
+            for gamma, gae_lambda in self.config.gae_ensemble
         )
+        advantage_estimates = [
+            compute_gae(
+                self.rewards,
+                self.dones,
+                self.values,
+                next_values.cpu().numpy(),
+                gamma,
+                gae_lambda,
+            )[0]
+            for gamma, gae_lambda in estimators
+        ]
+        stacked = np.stack(advantage_estimates)
+        advantages = np.median(stacked, axis=0).astype(np.float32)
+        if len(advantage_estimates) == 1:
+            self.advantage_confidence.fill(1.0)
+        else:
+            sign_agreement = np.abs(np.sign(stacked).mean(axis=0))
+            scale = np.mean(np.abs(stacked), axis=0) + 1e-6
+            relative_dispersion = np.std(stacked, axis=0) / scale
+            self.advantage_confidence = np.clip(
+                sign_agreement / (1.0 + relative_dispersion), 0.0, 1.0
+            ).astype(np.float32)
+        returns = advantages + self.values
         return advantages, returns
 
     def update_policy(
         self, advantages: np.ndarray, returns: np.ndarray
-    ) -> dict[str, float]:
+    ) -> dict[str, float | bool]:
         self.model.train()
         cfg = self.config
         batch_size = cfg.batch_size
@@ -172,11 +253,21 @@ class PPOTrainer:
             advantages.reshape(batch_size), device=self.device
         )
         returns_t = torch.as_tensor(returns.reshape(batch_size), device=self.device)
+        confidence_t = torch.as_tensor(
+            self.advantage_confidence.reshape(batch_size), device=self.device
+        )
+        uncertainty_t = torch.as_tensor(
+            self.value_uncertainty.reshape(batch_size), device=self.device
+        )
 
         if cfg.normalize_advantage:
             advantages_t = (advantages_t - advantages_t.mean()) / (
                 advantages_t.std() + 1e-8
             )
+        confidence_weight = confidence_t.pow(cfg.consensus_power)
+        relative_uncertainty = uncertainty_t / (old_values.abs() + 1.0)
+        uncertainty_weight = torch.exp(-cfg.uncertainty_coef * relative_uncertainty)
+        advantages_t = advantages_t * confidence_weight * uncertainty_weight
 
         totals = {
             "policy_loss": 0.0,
@@ -190,6 +281,7 @@ class PPOTrainer:
         }
 
         indices = np.arange(batch_size)
+        early_stopped = False
         for epoch in range(cfg.update_epochs):
             epoch_kl = 0.0
             epoch_minibatches = 0
@@ -198,8 +290,10 @@ class PPOTrainer:
                 mb_idx = torch.as_tensor(
                     indices[start : start + cfg.minibatch_size], device=self.device
                 )
-                _, new_log_prob, entropy, new_value = self.model.act(
+                _, new_log_prob, entropy, _new_value, new_value_distribution = (
+                    self.model.act_ensemble(
                     observations[mb_idx], actions[mb_idx]
+                    )
                 )
                 log_ratio = new_log_prob - old_log_probs[mb_idx]
                 ratio = log_ratio.exp()
@@ -219,15 +313,27 @@ class PPOTrainer:
                     policy_loss_unclipped, policy_loss_clipped
                 ).mean()
 
-                value_delta = new_value - old_values[mb_idx]
-                value_clipped = old_values[mb_idx] + torch.clamp(
+                old_value = old_values[mb_idx].unsqueeze(-1)
+                value_delta = new_value_distribution - old_value
+                value_clipped = old_value + torch.clamp(
                     value_delta, -cfg.value_clip_coef, cfg.value_clip_coef
                 )
-                value_loss_unclipped = (new_value - returns_t[mb_idx]).pow(2)
-                value_loss_clipped = (value_clipped - returns_t[mb_idx]).pow(2)
-                value_loss = 0.5 * torch.maximum(
+                target = returns_t[mb_idx].unsqueeze(-1)
+                value_loss_unclipped = (new_value_distribution - target).pow(2)
+                value_loss_clipped = (value_clipped - target).pow(2)
+                value_errors = torch.maximum(
                     value_loss_unclipped, value_loss_clipped
-                ).mean()
+                )
+                if cfg.value_heads > 1 and cfg.critic_bootstrap_probability < 1.0:
+                    mask = (
+                        torch.rand_like(value_errors)
+                        < cfg.critic_bootstrap_probability
+                    ).float()
+                    empty_rows = mask.sum(dim=0) == 0
+                    mask[0, empty_rows] = 1.0
+                    value_loss = 0.5 * (value_errors * mask).sum() / mask.sum()
+                else:
+                    value_loss = 0.5 * value_errors.mean()
 
                 entropy_mean = entropy.mean()
                 loss = (
@@ -256,12 +362,14 @@ class PPOTrainer:
             totals["optimizer_epochs"] = float(epoch + 1)
             mean_epoch_kl = epoch_kl / max(1, epoch_minibatches)
             if cfg.target_kl is not None and mean_epoch_kl > cfg.target_kl:
+                early_stopped = True
                 break
 
         count = max(1.0, totals.pop("minibatches"))
         epochs = totals.pop("optimizer_epochs")
         averaged = {key: value / count for key, value in totals.items()}
         averaged["optimizer_epochs"] = epochs
+        averaged["early_stopped"] = early_stopped
         return averaged
 
     def train(
@@ -269,7 +377,7 @@ class PPOTrainer:
         callback: Callable[[TrainMetrics], None] | None = None,
     ) -> list[TrainMetrics]:
         history: list[TrainMetrics] = []
-        for update in range(1, self.config.updates + 1):
+        for update in range(self.completed_updates + 1, self.config.updates + 1):
             if self.config.anneal_lr:
                 fraction = 1.0 - (update - 1.0) / self.config.updates
                 lr = fraction * self.config.learning_rate
@@ -306,7 +414,11 @@ class PPOTrainer:
                 learning_rate=lr,
                 gradient_norm=losses["gradient_norm"],
                 optimizer_epochs=int(losses["optimizer_epochs"]),
+                early_stopped=bool(losses["early_stopped"]),
+                advantage_consensus=float(self.advantage_confidence.mean()),
+                value_uncertainty=float(self.value_uncertainty.mean()),
             )
+            self.completed_updates = update
             history.append(metrics)
             if callback is not None:
                 callback(metrics)

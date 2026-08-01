@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 from pufferforge.distributions import multidiscrete, squashed_gaussian
-from pufferforge.models import RecurrentActorCritic
+from pufferforge.models import ActorCritic, RecurrentActorCritic
 from pufferforge.registry import make, register
 from pufferforge.replay import PrioritizedReplay
 from pufferforge.selfplay import EloLeague
@@ -29,6 +29,19 @@ def test_recurrent_policy_resets_state() -> None:
     assert logits.shape == (4, 2, 2)
     assert values.shape == (4, 2)
     assert state.shape == (1, 2, 8)
+
+
+def test_actor_critic_value_ensemble_reports_mean_and_distribution() -> None:
+    model = ActorCritic(3, 2, hidden_size=8, hidden_layers=1, value_heads=3)
+    observations = torch.randn(5, 3)
+    logits, values = model(observations)
+    ensemble_logits, distribution = model.forward_distribution(observations)
+
+    assert logits.shape == (5, 2)
+    assert distribution.shape == (5, 3)
+    assert torch.allclose(logits, ensemble_logits)
+    assert torch.allclose(values, distribution.mean(dim=-1))
+    assert distribution.std(dim=-1).mean() > 0
 
 
 def test_prioritized_replay_and_league() -> None:

@@ -14,7 +14,7 @@ from .atlaslab import (
     run_atlas_swarm,
     write_atlas_report,
 )
-from .checkpoint import load_checkpoint
+from .checkpoint import read_checkpoint
 from .config import TrainConfig
 from .envs import NativeLineWorld
 from .models import ActorCritic
@@ -31,6 +31,17 @@ def add_train_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--target-kl", type=float, default=0.02)
     parser.add_argument("--adam-epsilon", type=float, default=1e-5)
+    parser.add_argument(
+        "--gae-estimator",
+        action="append",
+        default=[],
+        metavar="GAMMA,LAMBDA",
+        help="additional GAE timescale; may be repeated",
+    )
+    parser.add_argument("--consensus-power", type=float, default=1.0)
+    parser.add_argument("--value-heads", type=int, default=1)
+    parser.add_argument("--critic-bootstrap-probability", type=float, default=1.0)
+    parser.add_argument("--uncertainty-coef", type=float, default=0.0)
     parser.add_argument("--hidden-size", type=int, default=128)
     parser.add_argument("--hidden-layers", type=int, default=2)
     parser.add_argument("--device", default="auto")
@@ -39,12 +50,24 @@ def add_train_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--checkpoint-dir", default="checkpoints")
     parser.add_argument("--checkpoint-interval", type=int, default=25)
     parser.add_argument("--json-log", type=Path)
+    parser.add_argument(
+        "--resume", type=Path, help="resume model, optimizer, and progress"
+    )
 
 
 def build_config(args: argparse.Namespace) -> TrainConfig:
     if args.config:
         config = TrainConfig.from_json(args.config)
     else:
+        gae_ensemble = []
+        for value in args.gae_estimator:
+            try:
+                gamma, gae_lambda = (float(part) for part in value.split(","))
+            except ValueError as exc:
+                raise ValueError(
+                    f"invalid --gae-estimator {value!r}; expected GAMMA,LAMBDA"
+                ) from exc
+            gae_ensemble.append((gamma, gae_lambda))
         config = TrainConfig(
             seed=args.seed,
             total_timesteps=args.total_timesteps,
@@ -54,6 +77,11 @@ def build_config(args: argparse.Namespace) -> TrainConfig:
             learning_rate=args.learning_rate,
             target_kl=args.target_kl,
             adam_epsilon=args.adam_epsilon,
+            gae_ensemble=tuple(gae_ensemble),
+            consensus_power=args.consensus_power,
+            value_heads=args.value_heads,
+            critic_bootstrap_probability=args.critic_bootstrap_probability,
+            uncertainty_coef=args.uncertainty_coef,
             hidden_size=args.hidden_size,
             hidden_layers=args.hidden_layers,
             device=args.device,
@@ -70,7 +98,10 @@ def format_metrics(metrics: TrainMetrics) -> str:
         f"sps={metrics.steps_per_second:9.0f} return={metrics.mean_return:7.3f} "
         f"pi={metrics.policy_loss:8.4f} vf={metrics.value_loss:8.4f} "
         f"ent={metrics.entropy:7.4f} kl={metrics.approx_kl:8.5f} "
-        f"grad={metrics.gradient_norm:7.3f} epochs={metrics.optimizer_epochs}"
+        f"grad={metrics.gradient_norm:7.3f} epochs={metrics.optimizer_epochs} "
+        f"kl_stop={int(metrics.early_stopped)} "
+        f"consensus={metrics.advantage_consensus:5.3f} "
+        f"v_unc={metrics.value_uncertainty:7.4f}"
     )
 
 
@@ -78,6 +109,8 @@ def train_command(args: argparse.Namespace) -> int:
     config = build_config(args)
     env = NativeLineWorld(config.num_envs, world_size=args.world_size, max_steps=args.max_steps, seed=config.seed)
     trainer = PPOTrainer(env, config)
+    if args.resume:
+        trainer.resume(args.resume)
     log_file = None
     if args.json_log:
         args.json_log.parent.mkdir(parents=True, exist_ok=True)
@@ -122,8 +155,21 @@ def evaluate_command(args: argparse.Namespace) -> int:
     device = torch.device("cuda" if args.device == "auto" and torch.cuda.is_available() else args.device)
     if args.device == "auto" and not torch.cuda.is_available():
         device = torch.device("cpu")
-    model = ActorCritic(env.obs_size, env.num_actions, args.hidden_size, args.hidden_layers).to(device)
-    load_checkpoint(args.checkpoint, model=model, map_location=device)
+    payload = read_checkpoint(args.checkpoint, map_location=device)
+    checkpoint_config = payload.get("config", {})
+    hidden_size = args.hidden_size or int(checkpoint_config.get("hidden_size", 128))
+    hidden_layers = args.hidden_layers or int(
+        checkpoint_config.get("hidden_layers", 2)
+    )
+    value_heads = args.value_heads or int(checkpoint_config.get("value_heads", 1))
+    model = ActorCritic(
+        env.obs_size,
+        env.num_actions,
+        hidden_size,
+        hidden_layers,
+        value_heads=value_heads,
+    ).to(device)
+    model.load_state_dict(payload["model"])
     model.eval()
     obs = env.reset(args.seed)
     completed = 0
@@ -213,8 +259,15 @@ def make_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument("--max-steps", type=int, default=64)
     eval_parser.add_argument("--seed", type=int, default=2)
     eval_parser.add_argument("--device", default="auto")
-    eval_parser.add_argument("--hidden-size", type=int, default=128)
-    eval_parser.add_argument("--hidden-layers", type=int, default=2)
+    eval_parser.add_argument(
+        "--hidden-size", type=int, help="override size inferred from checkpoint"
+    )
+    eval_parser.add_argument(
+        "--hidden-layers", type=int, help="override depth inferred from checkpoint"
+    )
+    eval_parser.add_argument(
+        "--value-heads", type=int, help="override critic heads inferred from checkpoint"
+    )
     eval_parser.set_defaults(func=evaluate_command)
 
     suite_parser = subparsers.add_parser("atlas-suite", help="run paired predictive mapping simulations")
