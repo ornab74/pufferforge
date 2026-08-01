@@ -245,6 +245,12 @@ Forecast collection maps beaches only to NOAA harmonic/reference stations that
 support hourly tides, requests each station once, summarizes failures, and keys
 its cache to the exact station set. Optional GRIB support is loaded dynamically,
 so editors do not report a missing `cfgrib` import in the default configuration.
+
+Colab demo forecasting is RAM-bounded: it selects a state-balanced cohort of
+250 beaches, uses 50,000-row Monte Carlo chunks, and releases PPO intermediates
+before expanding beach-hours. CUDA runs use larger PPO rollouts, minibatches,
+and networks; CPU runs retain the compact profile. Override the limits with
+`SURFGUARD_DEMO_MAX_FORECAST_BEACHES` and `SURFGUARD_FORECAST_CHUNK_SIZE`.
 The forecast pipeline also reads NOAA prediction capabilities, maps beaches to
 hourly-capable reference stations, refreshes stale station caches, and reports
 unavailable stations once. NOAA's one-year hourly prediction allowance reduces

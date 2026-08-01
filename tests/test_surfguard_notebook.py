@@ -63,6 +63,38 @@ def test_future_tides_use_hourly_capable_stations_and_fail_once() -> None:
     assert 'print("Future tide failed:"' not in collector
 
 
+def test_demo_forecast_is_memory_bounded_and_state_balanced() -> None:
+    import pandas as pd
+
+    source = _code_source()
+    namespace = {"pd": pd}
+    exec(_function_source("select_forecast_beaches"), namespace)
+    beaches = pd.DataFrame(
+        {
+            "beach_id": range(12),
+            "state": ["CA"] * 8 + ["OR"] * 2 + ["WA"] * 2,
+            "tide_distance_km": [8, 7, 6, 5, 4, 3, 2, 1, 2, 1, 2, 1],
+        }
+    )
+
+    selected = namespace["select_forecast_beaches"](beaches, 6)
+
+    assert len(selected) == 6
+    assert set(selected["state"]) == {"CA", "OR", "WA"}
+    assert "SURFGUARD_DEMO_MAX_FORECAST_BEACHES" in source
+    assert "SURFGUARD_FORECAST_CHUNK_SIZE" in source
+    assert "forecast_beaches" in source
+
+
+def test_cuda_profile_uses_larger_ppo_batches_and_releases_training_state() -> None:
+    source = _code_source()
+    assert 'cuda_training = runtime_device.accelerator == "cuda"' in source
+    assert "minibatch_size=min(8192 if cuda_training else 1024" in source
+    assert "hidden_size=256 if cuda_training else 128" in source
+    assert 'for _name in ("trainer", "env", "rl_frame")' in source
+    assert "torch.cuda.empty_cache()" in source
+
+
 def test_notebook_has_no_stale_saved_outputs() -> None:
     for cell in _notebook().cells:
         if cell.cell_type == "code":

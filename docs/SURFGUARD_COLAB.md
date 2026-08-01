@@ -11,6 +11,20 @@ hourly series required by SurfGuard, so they are excluded before beach mapping.
 Each station is requested once, failures are summarized once, and forecast cache
 names include a digest of the selected stations to prevent stale catalog reuse.
 
+## Colab memory profile
+
+Demo mode forecasts a state-balanced cohort of 250 beaches and processes Monte
+Carlo inference in 50,000-row chunks. This avoids materializing the full
+contiguous-US beach-hour simulation in a standard Colab RAM allocation. Set
+`SURFGUARD_DEMO_MAX_FORECAST_BEACHES` or `SURFGUARD_FORECAST_CHUNK_SIZE` before
+the configuration cell to tune those bounds; `FULL_SCALE=True` deliberately
+removes the beach cap and should use a high-memory runtime.
+
+PPO is a comparatively small neural workload. On CUDA, the notebook now uses
+larger vector rollouts, 8,192-row minibatches, and a wider policy; CPU retains
+the compact settings. Training objects and cached CUDA tensors are released
+before dataframe forecasting begins.
+
 The CO-OPS catalog records NOAA's prediction type and reference station ID.
 Hourly feature panels use reference/harmonic stations (`R`/`H`); subordinate
 stations (`S`) are excluded because NOAA limits them to high/low predictions.
