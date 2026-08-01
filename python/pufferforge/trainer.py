@@ -128,7 +128,9 @@ class PPOTrainer:
         self.value_uncertainty = np.zeros(shape, dtype=np.float32)
         self.advantage_confidence = np.ones(shape, dtype=np.float32)
 
-        self.current_obs = np.asarray(env.reset(config.seed), dtype=np.float32)
+        self.current_obs = self._validate_observations(
+            env.reset(config.seed), source="reset"
+        )
         if self.current_obs.shape != (config.num_envs, env.obs_size):
             raise ValueError(
                 f"reset returned {self.current_obs.shape}; expected "
@@ -137,6 +139,31 @@ class PPOTrainer:
         self.global_step = 0
         self.completed_updates = 0
         self.start_time = time.perf_counter()
+
+    def _validate_observations(
+        self, observations: np.ndarray, *, source: str
+    ) -> np.ndarray:
+        array = np.asarray(observations, dtype=np.float32)
+        expected = (self.config.num_envs, self.env.obs_size)
+        if array.shape != expected:
+            raise ValueError(
+                f"{source} returned observations with shape {array.shape}; "
+                f"expected {expected}"
+            )
+        finite = np.isfinite(array)
+        if not finite.all():
+            rows, columns = np.where(~finite)
+            examples = list(zip(rows[:8].tolist(), columns[:8].tolist(), strict=True))
+            raise ValueError(
+                f"{source} returned {int((~finite).sum())} non-finite observation "
+                f"value(s); first (env, feature) indices: {examples}"
+            )
+        return array
+
+    def _model_is_finite(self) -> bool:
+        return all(
+            bool(torch.isfinite(value).all()) for value in self.model.state_dict().values()
+        )
 
     def resume(self, path: str | Path, *, load_optimizer: bool = True) -> dict:
         """Restore training progress at a rollout boundary.
@@ -199,7 +226,9 @@ class PPOTrainer:
             )
             self.rewards[t] = result.rewards
             self.dones[t] = result.done.astype(np.uint8, copy=False)
-            self.current_obs = np.asarray(result.observations, dtype=np.float32)
+            self.current_obs = self._validate_observations(
+                result.observations, source=f"step {t}"
+            )
             self.global_step += self.config.num_envs
 
         with torch.inference_mode():
@@ -439,9 +468,16 @@ class PPOTrainer:
                 and float(losses["approx_kl"]) > self.config.rollback_kl
             ):
                 rollback_reason = "kl_budget_exceeded"
+            if rollback_reason is None and not self._model_is_finite():
+                rollback_reason = "non_finite_parameters"
             update_rolled_back = rollback_reason is not None and snapshot is not None
             if update_rolled_back:
                 self._restore_update_state(snapshot)
+            elif rollback_reason is not None:
+                raise FloatingPointError(
+                    f"PPO update rejected ({rollback_reason}) but transactional_updates "
+                    "is disabled, so no safe optimizer state is available to restore"
+                )
             stats = self.env.drain_stats()
 
             value_flat = self.values.reshape(-1)

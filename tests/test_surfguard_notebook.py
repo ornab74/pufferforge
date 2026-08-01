@@ -212,6 +212,33 @@ def test_notebook_enables_confidence_aware_ppo() -> None:
     assert "runtime_device = select_device" in source
     assert '"runtime_device": runtime_device.to_dict()' in source
 
+
+def test_rl_observation_builder_coerces_object_and_all_missing_features() -> None:
+    from collections.abc import Sequence
+
+    import numpy as np
+    import pandas as pd
+
+    namespace = {"np": np, "pd": pd, "Sequence": Sequence}
+    exec(_function_source("finite_rl_observations"), namespace)
+    frame = pd.DataFrame(
+        {
+            "numeric_text": ["1.0", None, "3.0", "bad"],
+            "all_missing_object": [None, None, None, None],
+            "infinite": [1.0, np.inf, -np.inf, 2.0],
+        }
+    )
+
+    matrix, diagnostics = namespace["finite_rl_observations"](
+        frame, list(frame.columns)
+    )
+
+    assert matrix.shape == (4, 3)
+    assert matrix.dtype == np.float32
+    assert np.isfinite(matrix).all()
+    assert "all_missing_object" in diagnostics["all_missing_features"]
+    assert diagnostics["imputed_values"] >= 6
+
 def test_climatology_skips_empty_features_without_runtime_warnings(tmp_path) -> None:
     import warnings
 

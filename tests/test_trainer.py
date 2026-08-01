@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 import torch
-from pufferforge import NativeLineWorld, PPOTrainer, TrainConfig
+from pufferforge import NativeLineWorld, PPOTrainer, PythonVectorEnv, TrainConfig
 
 
 def test_trainer_smoke(tmp_path) -> None:
@@ -223,3 +223,72 @@ def test_transactional_update_restores_model_and_optimizer() -> None:
 def test_transaction_configuration_is_validated() -> None:
     with pytest.raises(ValueError, match="rollback_kl"):
         TrainConfig(rollback_kl=0.0).validate()
+
+
+def test_rejected_update_without_snapshot_fails_immediately() -> None:
+    config = TrainConfig(
+        total_timesteps=16,
+        num_envs=4,
+        horizon=4,
+        minibatch_size=16,
+        update_epochs=1,
+        hidden_size=8,
+        hidden_layers=1,
+        checkpoint_interval=0,
+        device="cpu",
+        transactional_updates=False,
+    )
+    trainer = PPOTrainer(
+        NativeLineWorld(4, world_size=7, max_steps=8, seed=7), config
+    )
+
+    def invalid_update(advantages, returns):
+        del advantages, returns
+        return {
+            "policy_loss": 0.0,
+            "value_loss": 0.0,
+            "entropy": 0.0,
+            "approx_kl": 0.0,
+            "clip_fraction": 0.0,
+            "gradient_norm": 0.0,
+            "optimizer_epochs": 0.0,
+            "early_stopped": False,
+            "invalid_reason": "non_finite_gradient",
+        }
+
+    trainer.update_policy = invalid_update
+    with pytest.raises(FloatingPointError, match="transactional_updates is disabled"):
+        trainer.train()
+    trainer.close()
+
+
+def test_trainer_rejects_non_finite_reset_observations_with_indices() -> None:
+    class NonFiniteEnv:
+        obs_size = 2
+        num_actions = 2
+
+        def reset(self, seed=None):
+            del seed
+            return np.array([np.nan, np.inf], dtype=np.float32)
+
+        def step(self, action):
+            del action
+            return self.reset(), 0.0, False, False, {}
+
+        def close(self):
+            pass
+
+    import numpy as np
+
+    env = PythonVectorEnv([NonFiniteEnv, NonFiniteEnv])
+    config = TrainConfig(
+        total_timesteps=4,
+        num_envs=2,
+        horizon=2,
+        minibatch_size=4,
+        checkpoint_interval=0,
+        device="cpu",
+    )
+    with pytest.raises(ValueError, match=r"reset returned 4 non-finite.*\(0, 0\)"):
+        PPOTrainer(env, config)
+    env.close()

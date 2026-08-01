@@ -20,6 +20,7 @@ to be understandable, portable, and easy to extend.
 - bootstrapped value ensembles with uncertainty-tempered policy updates
 - transactional PPO updates with exact model/optimizer rollback
 - automatic CUDA/CPU selection with indexed-GPU validation and hardware telemetry
+- finite-observation enforcement before every policy inference
 - atomic checkpoints, evaluation CLI, JSONL metrics, tests, and benchmarks
 - native autoreset and aggregated episode statistics
 - AtlasLab predictive mapping simulations with hidden controls and changing worlds
@@ -179,6 +180,20 @@ pre-update state while retaining the collected runtime metrics for diagnosis.
 console and JSONL telemetry. Set `--no-transactional-updates` for
 memory-constrained runs; snapshots temporarily require approximately one
 additional model plus optimizer state.
+
+### Numerical safety boundary
+
+`PPOTrainer` validates observation shape and finiteness after every reset and
+environment step. Invalid features now fail before policy inference with the
+first `(environment, feature)` indices instead of surfacing later as NaN
+categorical logits. Transactional training also verifies all model tensors after
+optimization and rolls back optimizer-produced non-finite parameters.
+
+The SurfGuard example separately coerces every RL feature to numeric, replaces
+infinities, imputes all-missing columns, applies finite robust scaling, and caps
+incident severity. It prints `rl_observation_diagnostics` before PPO starts so
+missing data sources remain visible even when their features safely fall back to
+zero.
 
 ## Benchmark native stepping
 

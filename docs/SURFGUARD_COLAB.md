@@ -111,6 +111,21 @@ from pufferforge import PPOTrainer, PythonVectorEnv, TrainConfig
 
 Do not use `from pufferforge.pufferforge ...`; that submodule does not exist.
 
+## NaN PPO logits
+
+The RL feature builder coerces every requested feature with `to_numeric`, replaces
+positive/negative infinity, imputes all-missing columns to zero, and performs a
+final finite-value check. This is intentionally separate from the supervised
+pipeline: pandas `median(numeric_only=True)` can omit object-typed all-missing
+columns rather than imputing them.
+
+Review the printed `rl_observation_diagnostics`. A large imputed count or entries
+in `all_missing_features` means the corresponding NOAA source was unavailable;
+PPO can still run, but those zero-filled features contain no information for that
+run. PufferForge also validates every environment observation before Torch policy
+inference and reports exact bad indices if a custom environment violates this
+contract.
+
 ## Compact example notebook
 
 The single committed notebook lives at
