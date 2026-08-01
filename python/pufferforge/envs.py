@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 import numpy as np
 
@@ -100,6 +101,21 @@ class PythonVectorEnv:
         self.num_envs = len(self._envs)
         self.obs_size = int(self._envs[0].obs_size)
         self.num_actions = int(self._envs[0].num_actions)
+        if self.obs_size <= 0 or self.num_actions <= 1:
+            self.close()
+            raise ValueError("environments must expose obs_size > 0 and num_actions > 1")
+        incompatible = [
+            index
+            for index, env in enumerate(self._envs[1:], start=1)
+            if int(env.obs_size) != self.obs_size
+            or int(env.num_actions) != self.num_actions
+        ]
+        if incompatible:
+            self.close()
+            raise ValueError(
+                "all environments must share one space; "
+                f"incompatible indices: {incompatible}"
+            )
         self._seed = seed
         self._episode_returns = np.zeros(self.num_envs, dtype=np.float64)
         self._episode_lengths = np.zeros(self.num_envs, dtype=np.int64)
@@ -117,14 +133,29 @@ class PythonVectorEnv:
         return np.stack(observations)
 
     def step(self, actions: np.ndarray) -> StepBatch:
-        actions = np.asarray(actions, dtype=np.int64).reshape(self.num_envs)
+        actions = np.asarray(actions, dtype=np.int64)
+        if actions.size != self.num_envs:
+            raise ValueError(
+                f"expected {self.num_envs} actions, received shape {actions.shape}"
+            )
+        actions = actions.reshape(self.num_envs)
+        if np.any((actions < 0) | (actions >= self.num_actions)):
+            raise ValueError(f"actions must be in [0, {self.num_actions})")
         observations = np.empty((self.num_envs, self.obs_size), dtype=np.float32)
         rewards = np.empty(self.num_envs, dtype=np.float32)
         terminated = np.zeros(self.num_envs, dtype=bool)
         truncated = np.zeros(self.num_envs, dtype=bool)
 
         for i, (env, action) in enumerate(zip(self._envs, actions, strict=True)):
-            obs, reward, term, trunc, _ = env.step(int(action))
+            transition = env.step(int(action))
+            if not isinstance(transition, tuple) or len(transition) != 5:
+                raise TypeError(
+                    "scalar env step() must return "
+                    "(obs, reward, terminated, truncated, info)"
+                )
+            obs, reward, term, trunc, _ = transition
+            if not np.isfinite(reward):
+                raise ValueError(f"environment {i} returned a non-finite reward")
             rewards[i] = reward
             terminated[i] = term
             truncated[i] = trunc

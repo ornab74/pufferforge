@@ -37,6 +37,10 @@ If compilation fails, it retries with:
 PUFFERFORGE_BUILD_NATIVE=0 python -m pip install --no-build-isolation --editable .
 ```
 
+Outside the notebook, packaging defaults to automatic native discovery and
+falls back cleanly when pybind11 headers are absent. The notebook uses explicit
+`1` then `0` modes so its status report can say which runtime was installed.
+
 The notebook no longer marks the second packaging attempt as fatal. It inserts the repository's `python/` directory into `sys.path` as a final deterministic source-tree fallback, so PPO with `PythonVectorEnv` remains available even if editable-package metadata fails. Native LineWorld benchmarks still require the compiled extension. Failed commands print their complete trailing pip output rather than only a generic `CalledProcessError`.
 
 ## NOAA CO-OPS
@@ -49,7 +53,17 @@ Historical headers distinguish uppercase `MM` (month) from lowercase `mm` (minut
 
 ## Optional GFS Wave support
 
-`cfgrib` and `eccodes` are optional. If either fails to install, keep `RUN_OPERATIONAL_GFSWAVE=False`; the historical tide and supervised pipeline still runs.
+`cfgrib` and `eccodes` are optional and are no longer installed by default. To
+use operational GFS Wave collection, set the following before running the
+installation cell, then set `RUN_OPERATIONAL_GFSWAVE=True` later:
+
+```python
+import os
+os.environ["SURFGUARD_INSTALL_GRIB"] = "1"
+```
+
+If either dependency fails to install, keep `RUN_OPERATIONAL_GFSWAVE=False`;
+the historical tide and supervised pipeline still runs.
 
 ## OpenAI calls
 
@@ -85,8 +99,10 @@ from pufferforge import PPOTrainer, PythonVectorEnv, TrainConfig
 
 Do not use `from pufferforge.pufferforge ...`; that submodule does not exist.
 
-## Compact notebook and payload
+## Compact example notebook
 
-The committed notebook has all execution counts, outputs, widget state, and stale Colab output metadata removed. It is serialized as compact JSON to keep the repository copy below 160 KB.
-
-`.github/surfguard_payload/part_00` through `part_07` contain a gzip-compressed, base64 representation of that exact notebook. CI reconstructs the payload into a temporary file, verifies its SHA-256 against the committed notebook, validates notebook JSON, and compiles every code cell. The payload contains source and markdown only—no API keys, downloaded NOAA data, model artifacts, or Google Drive credentials.
+The single committed notebook lives at
+`examples/SurfGuard_USA_PufferForge_Colab.ipynb`. Its execution counts, outputs,
+widget state, and stale Colab metadata are removed, and every code cell is
+compiled by the test suite. Keeping one authoritative example prevents repaired
+and output variants from drifting apart.

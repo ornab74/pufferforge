@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
 import random
 import time
-from typing import Callable
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -32,6 +32,8 @@ class TrainMetrics:
     mean_return: float
     mean_length: float
     learning_rate: float
+    gradient_norm: float
+    optimizer_epochs: int
 
     def to_dict(self) -> dict[str, int | float]:
         return {
@@ -48,6 +50,8 @@ class TrainMetrics:
             "mean_return": self.mean_return,
             "mean_length": self.mean_length,
             "learning_rate": self.learning_rate,
+            "gradient_norm": self.gradient_norm,
+            "optimizer_epochs": self.optimizer_epochs,
         }
 
 
@@ -67,6 +71,8 @@ class PPOTrainer:
         random.seed(config.seed)
         np.random.seed(config.seed)
         torch.manual_seed(config.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(config.seed)
 
         self.env = env
         self.config = config
@@ -79,7 +85,9 @@ class PPOTrainer:
         )
         self.model.to(self.device)
         self.optimizer = torch.optim.Adam(
-            self.model.parameters(), lr=config.learning_rate, eps=1e-5
+            self.model.parameters(),
+            lr=config.learning_rate,
+            eps=config.adam_epsilon,
         )
 
         shape = (config.horizon, config.num_envs)
@@ -176,11 +184,15 @@ class PPOTrainer:
             "entropy": 0.0,
             "approx_kl": 0.0,
             "clip_fraction": 0.0,
+            "gradient_norm": 0.0,
             "minibatches": 0.0,
+            "optimizer_epochs": 0.0,
         }
 
         indices = np.arange(batch_size)
-        for _ in range(cfg.update_epochs):
+        for epoch in range(cfg.update_epochs):
+            epoch_kl = 0.0
+            epoch_minibatches = 0
             np.random.shuffle(indices)
             for start in range(0, batch_size, cfg.minibatch_size):
                 mb_idx = torch.as_tensor(
@@ -226,7 +238,9 @@ class PPOTrainer:
 
                 self.optimizer.zero_grad(set_to_none=True)
                 loss.backward()
-                nn.utils.clip_grad_norm_(self.model.parameters(), cfg.max_grad_norm)
+                gradient_norm = nn.utils.clip_grad_norm_(
+                    self.model.parameters(), cfg.max_grad_norm
+                )
                 self.optimizer.step()
 
                 totals["policy_loss"] += float(policy_loss.detach())
@@ -234,10 +248,21 @@ class PPOTrainer:
                 totals["entropy"] += float(entropy_mean.detach())
                 totals["approx_kl"] += float(approx_kl.detach())
                 totals["clip_fraction"] += float(clip_fraction.detach())
+                totals["gradient_norm"] += float(gradient_norm.detach())
                 totals["minibatches"] += 1.0
+                epoch_kl += float(approx_kl.detach())
+                epoch_minibatches += 1
+
+            totals["optimizer_epochs"] = float(epoch + 1)
+            mean_epoch_kl = epoch_kl / max(1, epoch_minibatches)
+            if cfg.target_kl is not None and mean_epoch_kl > cfg.target_kl:
+                break
 
         count = max(1.0, totals.pop("minibatches"))
-        return {key: value / count for key, value in totals.items()}
+        epochs = totals.pop("optimizer_epochs")
+        averaged = {key: value / count for key, value in totals.items()}
+        averaged["optimizer_epochs"] = epochs
+        return averaged
 
     def train(
         self,
@@ -279,6 +304,8 @@ class PPOTrainer:
                 mean_return=float(stats.get("mean_return", 0.0)),
                 mean_length=float(stats.get("mean_length", 0.0)),
                 learning_rate=lr,
+                gradient_norm=losses["gradient_norm"],
+                optimizer_epochs=int(losses["optimizer_epochs"]),
             )
             history.append(metrics)
             if callback is not None:

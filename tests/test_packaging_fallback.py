@@ -13,6 +13,8 @@ def test_pure_python_editable_install_metadata_path_is_supported() -> None:
     assert "PUFFERFORGE_BUILD_NATIVE" in setup_text
     assert "discover_pybind_include" in setup_text
     assert 'Path(torch.__file__).resolve().parent / "include"' in setup_text
+    assert 'os.environ.get("PUFFERFORGE_BUILD_NATIVE", "auto")' in setup_text
+    assert "native_mode == \"auto\"" in setup_text
 
 
 def test_pep517_pure_python_wheel_builds(tmp_path: Path) -> None:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
-
+import pytest
 from pufferforge import NativeLineWorld
 from pufferforge.native import compute_gae
 
@@ -44,3 +44,23 @@ def test_native_gae_matches_reference() -> None:
 
     np.testing.assert_allclose(advantages, reference, rtol=1e-5, atol=1e-5)
     np.testing.assert_allclose(returns, reference + values, rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("dones", np.zeros((2, 2), dtype=np.uint8)),
+        ("values", np.zeros((2, 2), dtype=np.float32)),
+        ("next_values", np.zeros(2, dtype=np.float32)),
+    ],
+)
+def test_gae_rejects_incompatible_shapes(field, value) -> None:
+    inputs = {
+        "rewards": np.zeros((3, 4), dtype=np.float32),
+        "dones": np.zeros((3, 4), dtype=np.uint8),
+        "values": np.zeros((3, 4), dtype=np.float32),
+        "next_values": np.zeros(4, dtype=np.float32),
+    }
+    inputs[field] = value
+    with pytest.raises(ValueError):
+        compute_gae(**inputs, gamma=0.99, gae_lambda=0.95)

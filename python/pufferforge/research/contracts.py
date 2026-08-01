@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from hashlib import sha256
-import json
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 
 class ContractError(ValueError):
@@ -147,7 +148,7 @@ class ExperimentContract:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "ExperimentContract":
+    def from_dict(cls, data: Mapping[str, Any]) -> ExperimentContract:
         arms = tuple(ExperimentArm(**{**arm, "tags": tuple(arm.get("tags", ()))}) for arm in data["arms"])
         primary = MetricSpec(**data["primary_metric"])
         secondary = tuple(MetricSpec(**metric) for metric in data.get("secondary_metrics", ()))
@@ -175,7 +176,7 @@ class ExperimentContract:
         return contract
 
     @classmethod
-    def from_json(cls, path: str | Path) -> "ExperimentContract":
+    def from_json(cls, path: str | Path) -> ExperimentContract:
         with Path(path).open("r", encoding="utf-8") as handle:
             return cls.from_dict(json.load(handle))
 

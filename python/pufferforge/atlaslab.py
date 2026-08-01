@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import json
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, replace
 from enum import IntEnum
 from hashlib import sha256
-import json
 from pathlib import Path
-from typing import Iterable, Mapping
 
 import numpy as np
 
@@ -61,7 +61,7 @@ class AtlasWorldConfig:
         if self.max_steps <= 0 or self.view_radius < 1 or self.scan_radius < self.view_radius:
             raise ValueError("invalid step or observation radius")
 
-    def mutated(self, **changes: object) -> "AtlasWorldConfig":
+    def mutated(self, **changes: object) -> AtlasWorldConfig:
         config = replace(self, **changes)
         config.validate()
         return config
@@ -169,7 +169,7 @@ class AtlasWorld:
         self.rotation = int(snapshot.rotation); self.rng = np.random.default_rng()
         self.rng.bit_generator.state = dict(snapshot.rng_state)
 
-    def clone(self) -> "AtlasWorld":
+    def clone(self) -> AtlasWorld:
         world = object.__new__(AtlasWorld); world.config = self.config; world.restore(self.snapshot()); return world
 
     @property
@@ -251,7 +251,7 @@ class PredictiveAtlas:
         self.effects: dict[tuple[int, int], list[tuple[int, int]]] = {}
         self.step = 0
 
-    def clone(self) -> "PredictiveAtlas":
+    def clone(self) -> PredictiveAtlas:
         other = PredictiveAtlas(self.height, self.width, prior=self.prior)
         for name in ("alpha", "transitions", "last_labels", "last_seen", "conflicts"):
             setattr(other, name, getattr(self, name).copy())
@@ -407,9 +407,13 @@ class FrontierAuction:
         remaining = list(tasks); assignments = {}
         for agent, (position, energy) in sorted(agents.items()):
             if not remaining: break
-            def bid(task: FrontierTask) -> float:
-                travel = abs(position[0] - task.cell[0]) + abs(position[1] - task.cell[1])
-                return task.information - 0.12 * travel - task.risk + 0.2 * energy
+            def bid(
+                task: FrontierTask,
+                origin: tuple[int, int] = position,
+                available_energy: float = energy,
+            ) -> float:
+                travel = abs(origin[0] - task.cell[0]) + abs(origin[1] - task.cell[1])
+                return task.information - 0.12 * travel - task.risk + 0.2 * available_energy
             chosen = max(remaining, key=bid); assignments[agent] = chosen; remaining.remove(chosen)
         return assignments
 
@@ -502,6 +506,9 @@ def write_atlas_report(report: Mapping[str, object], path: str | Path) -> Path:
     target.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8"); return target
 
 
-__all__ = [name for name in globals() if name.startswith("Atlas") or name.startswith("Predictive")
-    or name.startswith("Map") or name.startswith("Frontier") or name.startswith("run_atlas")
-    or name == "write_atlas_report"]
+__all__ = [
+    name
+    for name in globals()
+    if name.startswith(("Atlas", "Predictive", "Map", "Frontier", "run_atlas"))
+    or name == "write_atlas_report"
+]

@@ -13,7 +13,9 @@ to be understandable, portable, and easy to extend.
 - Python vector-environment protocol and pure-Python reference vectorizer
 - PyTorch discrete actor-critic model
 - PPO rollout collection, clipped policy/value losses, entropy regularization,
-  gradient clipping, learning-rate annealing, and explained variance
+  gradient clipping, learning-rate annealing, KL early stopping, and explained variance
+- gradient-norm and optimizer-epoch telemetry for diagnosing unstable PPO updates
+- reproducible CPU/CUDA seeding and complete-rollout timestep budgeting
 - atomic checkpoints, evaluation CLI, JSONL metrics, tests, and benchmarks
 - native autoreset and aggregated episode statistics
 - AtlasLab predictive mapping simulations with hidden controls and changing worlds
@@ -57,6 +59,10 @@ Build the pure-Python/NumPy fallback without compiling C++:
 PUFFERFORGE_BUILD_NATIVE=0 python -m pip install --no-build-isolation --editable .
 ```
 
+Native discovery defaults to `auto`: when pybind11 headers are unavailable,
+packaging completes with the pure-Python runtime. Set
+`PUFFERFORGE_BUILD_NATIVE=1` when a missing native extension should be fatal.
+
 Disable OpenMP when necessary:
 
 ```bash
@@ -83,8 +89,22 @@ pufferforge train \
   --horizon 128 \
   --minibatch-size 4096 \
   --total-timesteps 250000 \
+  --target-kl 0.02 \
   --json-log runs/lineworld.jsonl
 ```
+
+### Advanced PPO controls
+
+PufferForge uses clipped PPO with GAE, value clipping, entropy regularization,
+global gradient clipping, and optional linear learning-rate annealing. A positive
+`target_kl` stops the remaining optimizer epochs when an epoch's mean approximate
+KL exceeds the trust-region budget. Set it to `null` in JSON to disable this
+guard. Metrics include `gradient_norm` and `optimizer_epochs`, making it easy to
+see whether updates are saturating the gradient clip or stopping early.
+
+`total_timesteps` is a lower bound: training completes whole vector rollouts and
+therefore rounds up to `num_envs * horizon`. This avoids silently training for
+fewer transitions than requested.
 
 ## Benchmark native stepping
 
@@ -129,7 +149,11 @@ See `docs/ATLASLAB.md` for details.
 
 ## SurfGuard-USA Colab
 
-`SurfGuard_USA_PufferForge_Colab.ipynb` builds a research pipeline for contiguous-U.S. coastal hazard reconstruction, calibrated risk modeling, and a PufferForge PPO alert policy. The notebook now:
+[![Open SurfGuard-USA in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ornab74/pufferforge/blob/main/examples/SurfGuard_USA_PufferForge_Colab.ipynb)
+
+[`examples/SurfGuard_USA_PufferForge_Colab.ipynb`](examples/SurfGuard_USA_PufferForge_Colab.ipynb)
+builds a research pipeline for contiguous-U.S. coastal hazard reconstruction,
+calibrated risk modeling, and a PufferForge PPO alert policy. The notebook now:
 
 - splits NOAA CO-OPS requests into service-safe 31-day windows;
 - installs PufferForge with a native-first, pure-Python fallback;
@@ -139,6 +163,11 @@ See `docs/ATLASLAB.md` for details.
 - uses configurable OpenAI Responses and speech model IDs.
 
 Open the notebook in Colab and run the installation, configuration, and runtime self-check cells first. See `docs/SURFGUARD_COLAB.md` for failure recovery and scale controls.
+
+The GRIB stack is skipped by default because the historical workflow does not
+need it. Set `SURFGUARD_INSTALL_GRIB=1` before the installation cell only when
+enabling operational GFS Wave collection. The repository keeps one clean,
+output-free notebook under `examples/` so fixes cannot drift across aliases.
 
 ## Custom Python environment
 
@@ -153,8 +182,9 @@ cpp/include/pufferforge/core.hpp  Native runtime interfaces
 cpp/src/bindings.cpp              C++ implementation + pybind11 module
 python/pufferforge/envs.py        Vector environment protocols/adapters
 python/pufferforge/models.py      Torch actor-critic models
-python/pufferforge/trainer.py     PPO runtime
+python/pufferforge/trainer.py     PPO runtime with KL guards and diagnostics
 python/pufferforge/atlaslab.py    Predictive mapping research vertical
+examples/                         Runnable Python and Colab workflows
 benchmarks/                       Throughput tools
 tests/                            Native, Python-vector, trainer, and mapping tests
 ```

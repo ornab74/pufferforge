@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import ast
-import json
 from pathlib import Path
 
 import nbformat
 
 ROOT = Path(__file__).resolve().parents[1]
-NOTEBOOK = ROOT / "SurfGuard_USA_PufferForge_Colab.ipynb"
+NOTEBOOK = ROOT / "examples" / "SurfGuard_USA_PufferForge_Colab.ipynb"
 
 
 def _notebook():
@@ -23,8 +22,11 @@ def test_notebook_json_and_all_code_cells_compile() -> None:
     assert notebook.nbformat == 4
     for index, cell in enumerate(notebook.cells):
         if cell.cell_type == "code":
-            compile(cell.source, f"SurfGuard cell {index}", "exec")
-            assert not any(output.get("output_type") == "error" for output in cell.get("outputs", []))
+            compile(cell.source, f"{NOTEBOOK.name} cell {index}", "exec")
+            assert not any(
+                output.get("output_type") == "error"
+                for output in cell.get("outputs", [])
+            )
 
 
 def test_notebook_uses_public_pufferforge_api_and_portable_models() -> None:
@@ -81,8 +83,9 @@ def _class_source(name: str) -> str:
 
 
 def test_date_chunk_helper_precedes_coops_use_and_chunks_a_year() -> None:
-    import pandas as pd
     import time
+
+    import pandas as pd
 
     notebook = _notebook()
     date_index = next(i for i, c in enumerate(notebook.cells) if c.cell_type == "code" and "def date_chunks" in c.source)
@@ -109,6 +112,7 @@ def test_date_chunk_helper_precedes_coops_use_and_chunks_a_year() -> None:
 def test_ndbc_parser_converts_documented_nines_to_nan() -> None:
     import gzip
     import io
+
     import numpy as np
     import pandas as pd
 
@@ -328,3 +332,5 @@ def test_install_cell_uses_isolated_builds_and_source_fallback() -> None:
     assert 'fallback_env["PUFFERFORGE_BUILD_NATIVE"] = "0"' in source
     assert 'source_dir = str(repo_dir / "python")' in source
     assert 'lines[-120:]' in source
+    assert 'SURFGUARD_INSTALL_GRIB' in source
+    assert 'SURFGUARD_REPO_DIR' in source

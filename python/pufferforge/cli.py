@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import time
+from pathlib import Path
 
 import numpy as np
 import torch
 
-from .atlaslab import AtlasWorldConfig, run_atlas_suite, run_atlas_swarm, write_atlas_report
+from .atlaslab import (
+    AtlasWorldConfig,
+    run_atlas_suite,
+    run_atlas_swarm,
+    write_atlas_report,
+)
 from .checkpoint import load_checkpoint
 from .config import TrainConfig
 from .envs import NativeLineWorld
@@ -24,6 +29,8 @@ def add_train_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--horizon", type=int, default=128)
     parser.add_argument("--minibatch-size", type=int, default=4096)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
+    parser.add_argument("--target-kl", type=float, default=0.02)
+    parser.add_argument("--adam-epsilon", type=float, default=1e-5)
     parser.add_argument("--hidden-size", type=int, default=128)
     parser.add_argument("--hidden-layers", type=int, default=2)
     parser.add_argument("--device", default="auto")
@@ -45,6 +52,8 @@ def build_config(args: argparse.Namespace) -> TrainConfig:
             horizon=args.horizon,
             minibatch_size=args.minibatch_size,
             learning_rate=args.learning_rate,
+            target_kl=args.target_kl,
+            adam_epsilon=args.adam_epsilon,
             hidden_size=args.hidden_size,
             hidden_layers=args.hidden_layers,
             device=args.device,
@@ -60,7 +69,8 @@ def format_metrics(metrics: TrainMetrics) -> str:
         f"update={metrics.update:4d} step={metrics.global_step:10d} "
         f"sps={metrics.steps_per_second:9.0f} return={metrics.mean_return:7.3f} "
         f"pi={metrics.policy_loss:8.4f} vf={metrics.value_loss:8.4f} "
-        f"ent={metrics.entropy:7.4f} kl={metrics.approx_kl:8.5f}"
+        f"ent={metrics.entropy:7.4f} kl={metrics.approx_kl:8.5f} "
+        f"grad={metrics.gradient_norm:7.3f} epochs={metrics.optimizer_epochs}"
     )
 
 

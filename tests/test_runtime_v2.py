@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import numpy as np
 import torch
-
 from pufferforge.distributions import multidiscrete, squashed_gaussian
 from pufferforge.models import RecurrentActorCritic
 from pufferforge.registry import make, register

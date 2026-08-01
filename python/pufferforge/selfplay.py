@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import math
 import random
-from typing import Iterable
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 
 
 @dataclass(slots=True)
@@ -20,7 +20,7 @@ class EloLeague:
         self.players: dict[str, Player] = {}
         self.rng = random.Random(seed)
 
-    def add(self, player_id: str, rating: float = 1000.0, **metadata: str | int | float) -> Player:
+    def add(self, player_id: str, rating: float = 1000.0, **metadata: str | float) -> Player:
         if player_id in self.players:
             raise ValueError(f"duplicate player: {player_id}")
         player = Player(player_id, rating, metadata=metadata)

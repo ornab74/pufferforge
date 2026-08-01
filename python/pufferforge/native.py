@@ -16,6 +16,21 @@ def compute_gae(
     dones = np.ascontiguousarray(dones, dtype=np.uint8)
     values = np.ascontiguousarray(values, dtype=np.float32)
     next_values = np.ascontiguousarray(next_values, dtype=np.float32)
+    if rewards.ndim != 2 or rewards.shape[0] == 0 or rewards.shape[1] == 0:
+        raise ValueError("rewards must have shape (horizon, num_envs) with non-zero dimensions")
+    if dones.shape != rewards.shape or values.shape != rewards.shape:
+        raise ValueError("dones and values must have the same shape as rewards")
+    if next_values.shape != (rewards.shape[1],):
+        raise ValueError(f"next_values must have shape ({rewards.shape[1]},)")
+    finite = (
+        np.isfinite(rewards).all()
+        and np.isfinite(values).all()
+        and np.isfinite(next_values).all()
+    )
+    if not finite:
+        raise ValueError("rewards and values must contain only finite values")
+    if not 0.0 <= gamma <= 1.0 or not 0.0 <= gae_lambda <= 1.0:
+        raise ValueError("gamma and gae_lambda must be in [0, 1]")
     try:
         from . import _core
         advantages, returns = _core.compute_gae(

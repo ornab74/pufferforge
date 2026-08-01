@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass
+from math import ceil
 from pathlib import Path
 from typing import Any
-import json
 
 
 @dataclass(slots=True)
@@ -22,6 +23,8 @@ class TrainConfig:
     entropy_coef: float = 0.01
     value_coef: float = 0.5
     max_grad_norm: float = 0.5
+    target_kl: float | None = 0.02
+    adam_epsilon: float = 1e-5
     anneal_lr: bool = True
     normalize_advantage: bool = True
     device: str = "auto"
@@ -47,6 +50,30 @@ class TrainConfig:
             raise ValueError("gae_lambda must be in [0, 1]")
         if self.update_epochs <= 0:
             raise ValueError("update_epochs must be positive")
+        if self.learning_rate <= 0:
+            raise ValueError("learning_rate must be positive")
+        if self.target_kl is not None and self.target_kl <= 0:
+            raise ValueError("target_kl must be positive or None")
+        if self.adam_epsilon <= 0:
+            raise ValueError("adam_epsilon must be positive")
+        non_negative = (
+            "clip_coef",
+            "value_clip_coef",
+            "entropy_coef",
+            "value_coef",
+            "max_grad_norm",
+        )
+        for name in non_negative:
+            if getattr(self, name) < 0:
+                raise ValueError(f"{name} must be non-negative")
+        if self.hidden_size <= 0 or self.hidden_layers <= 0:
+            raise ValueError("hidden_size and hidden_layers must be positive")
+        if self.checkpoint_interval < 0 or self.log_interval <= 0:
+            raise ValueError(
+                "checkpoint_interval must be non-negative and log_interval positive"
+            )
+        if self.device != "auto" and not self.device.strip():
+            raise ValueError("device cannot be empty")
 
     @property
     def batch_size(self) -> int:
@@ -54,15 +81,20 @@ class TrainConfig:
 
     @property
     def updates(self) -> int:
-        return max(1, self.total_timesteps // self.batch_size)
+        return max(1, ceil(self.total_timesteps / self.batch_size))
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
-    def from_json(cls, path: str | Path) -> "TrainConfig":
+    def from_json(cls, path: str | Path) -> TrainConfig:
         with Path(path).open("r", encoding="utf-8") as handle:
-            return cls(**json.load(handle))
+            payload = json.load(handle)
+        if not isinstance(payload, dict):
+            raise TypeError("training configuration must be a JSON object")
+        config = cls(**payload)
+        config.validate()
+        return config
 
     def save_json(self, path: str | Path) -> None:
         output = Path(path)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
-
+import pytest
 from pufferforge.envs import PythonVectorEnv
 
 
@@ -34,3 +34,20 @@ def test_python_vector_autoreset() -> None:
     assert result.done.all()
     assert (result.observations == 0).all()
     assert env.drain_stats()["episodes"] == 2
+
+
+def test_python_vector_validates_actions() -> None:
+    env = PythonVectorEnv([CounterEnv, CounterEnv])
+    with pytest.raises(ValueError, match="expected 2 actions"):
+        env.step(np.array([1]))
+    with pytest.raises(ValueError, match="actions must be"):
+        env.step(np.array([1, 2]))
+    env.close()
+
+
+def test_python_vector_rejects_mixed_spaces() -> None:
+    class OtherCounter(CounterEnv):
+        obs_size = 2
+
+    with pytest.raises(ValueError, match="incompatible indices"):
+        PythonVectorEnv([CounterEnv, OtherCounter])

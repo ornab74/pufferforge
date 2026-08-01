@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
+
 import numpy as np
 
 
@@ -17,7 +18,7 @@ class Box:
     low: float | np.ndarray
     high: float | np.ndarray
     shape: tuple[int, ...]
-    dtype: np.dtype = np.dtype(np.float32)
+    dtype: np.dtype = field(default_factory=lambda: np.dtype(np.float32))
 
     def __post_init__(self) -> None:
         if not self.shape or any(d <= 0 for d in self.shape):

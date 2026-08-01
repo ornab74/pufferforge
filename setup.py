@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import os
 import sys
+import warnings
 from pathlib import Path
+from typing import ClassVar
+
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 
@@ -20,13 +23,13 @@ def discover_pybind_include() -> str | None:
         candidate = Path(torch.__file__).resolve().parent / "include"
         if (candidate / "pybind11" / "pybind11.h").exists():
             return str(candidate)
-    except Exception:
-        pass
+    except (ImportError, OSError):
+        return None
     return None
 
 
 class BuildExt(build_ext):
-    c_opts = {
+    c_opts: ClassVar[dict[str, list[str]]] = {
         "msvc": ["/O2", "/std:c++20"],
         "unix": ["-O3", "-std=c++20", "-fvisibility=hidden"],
     }
@@ -46,14 +49,23 @@ class BuildExt(build_ext):
         super().build_extensions()
 
 
-build_native = os.environ.get("PUFFERFORGE_BUILD_NATIVE", "1") != "0"
-pybind_include = discover_pybind_include() if build_native else None
+native_mode = os.environ.get("PUFFERFORGE_BUILD_NATIVE", "auto").strip().lower()
+if native_mode not in {"0", "1", "auto"}:
+    raise RuntimeError("PUFFERFORGE_BUILD_NATIVE must be '0', '1', or 'auto'")
+pybind_include = discover_pybind_include() if native_mode != "0" else None
+build_native = pybind_include is not None
 
-if build_native and pybind_include is None:
+if native_mode == "1" and not build_native:
     raise RuntimeError(
-        "PufferForge native build requested but pybind11 headers were not found. "
-        "Install pybind11, install PyTorch, or set PUFFERFORGE_BUILD_NATIVE=0 "
-        "for the NumPy/PyTorch fallback runtime."
+        "PufferForge native build was explicitly requested but pybind11 headers "
+        "were not found. Install pybind11 or PyTorch, or set "
+        "PUFFERFORGE_BUILD_NATIVE=0 for the fallback runtime."
+    )
+if native_mode == "auto" and not build_native:
+    warnings.warn(
+        "pybind11 headers were not found; building the pure-Python PufferForge "
+        "runtime. Set PUFFERFORGE_BUILD_NATIVE=1 to require native support.",
+        stacklevel=1,
     )
 
 include_dirs = ["cpp/include"]

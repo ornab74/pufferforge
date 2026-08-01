@@ -26,3 +26,10 @@ package-dir = {"" = "python"}
 
 [tool.setuptools.packages.find]
 where = ["python"]
+
+[tool.ruff]
+extend-exclude = ["*.ipynb"]
+
+[tool.ruff.lint.per-file-ignores]
+# These tests deliberately execute isolated AST-extracted notebook definitions.
+"tests/test_surfguard_notebook.py" = ["S102"]
